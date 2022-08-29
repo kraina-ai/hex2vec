@@ -52,7 +52,7 @@ def download_specific_tags(
     tags: Dict[str, Union[str, bool]],
     timeout: int = 10000,
 ) -> GeoDataFrame:
-    ox.config(timeout=timeout)
+    ox.settings.timeout = timeout
     geometries_df = ox.geometries_from_place(area_name, tags=tags)
     geometries_df = ensure_geometry_type(geometries_df)
     return geometries_df
