@@ -95,7 +95,7 @@ def get_hexes_polygons_for_city(
 
 def add_h3_indices(gdf: GeoDataFrame, city: Union[str, List[str]], resolution: int) -> GeoDataFrame:
     hexes_polygons_gdf = get_hexes_polygons_for_city(city, resolution)
-    h3_added = gpd.sjoin(gdf, hexes_polygons_gdf, how="inner", op="intersects")
+    h3_added = gpd.sjoin(gdf, hexes_polygons_gdf, how="inner", predicate="intersects")
     return h3_added
 
 def add_h3_indices_to_city(city: Union[str, List[str]], resolution: int):
@@ -103,12 +103,11 @@ def add_h3_indices_to_city(city: Union[str, List[str]], resolution: int):
         city_name = city
     else:
         city_name = city[0]
-
     city_destination_path = prepare_city_path(DATA_INTERIM_DIR, city_name)
     for tag in TOP_LEVEL_OSM_TAGS:
         tag_gdf = load_city_tag(city_name, tag)
         if tag_gdf is not None:
-            tag_gdf = tag_gdf[['unique_id', tag, 'geometry']]
+            tag_gdf = tag_gdf.reset_index()[['osmid', tag, 'geometry']]
             h3_gdf = add_h3_indices(tag_gdf, city, resolution)
             result_path = city_destination_path.joinpath(f"{tag}_{resolution}.pkl")
             h3_gdf.to_pickle(result_path)
