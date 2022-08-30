@@ -169,16 +169,13 @@ def group_city_tags(
     return results
 
 
-def group_city_top_level_tags(
-    city: str, resolution: int, tags=TOP_LEVEL_OSM_TAGS
-) -> pd.DataFrame:
+def group_city_top_level_tags(city: str, resolution: int, tags=TOP_LEVEL_OSM_TAGS) -> pd.DataFrame:
     dfs = []
     for tag in tags:
         df = load_city_tag_h3(city, tag, resolution)
         if df is not None:
             df = df[["h3", tag]]
             dfs.append(df)
-
     results = pd.concat(dfs, axis=0)
     for tag in tags:
         if tag not in results.columns:
@@ -186,14 +183,12 @@ def group_city_top_level_tags(
     df_tags = results[tags]
     df_tags = df_tags.notna().astype(float)
     results[tags] = df_tags
-    df_top_level = results.groupby("h3").sum().reset_index()[["h3", *tags]]
-    return df_top_level
+    return results.groupby("h3").sum().reset_index()[["h3", *tags]]
 
 
 def add_geometry_to_df(df: pd.DataFrame) -> GeoDataFrame:
     df["geometry"] = df["h3"].apply(h3_to_polygon)
-    gdf = GeoDataFrame(df, crs="EPSG:4326")
-    return gdf
+    return GeoDataFrame(df, crs="EPSG:4326")
 
 
 def group_cities(cities: str, resolution: int, add_city_column=True) -> pd.DataFrame:
