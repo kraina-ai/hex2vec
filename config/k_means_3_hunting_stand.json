@@ -1,1 +1,138 @@
-{"version": "v1", "config": {"visState": {"filters": [], "layers": [{"id": "phu464", "type": "hexagonId", "config": {"dataId": "clusters", "label": "h3", "color": [34, 63, 154], "columns": {"hex_id": "h3"}, "isVisible": true, "visConfig": {"opacity": 0.45, "colorRange": {"name": "Uber Viz Diverging 0", "type": "diverging", "category": "Uber", "colors": ["#00939C", "#FEEEE8", "#C22E00"]}, "coverage": 1, "enable3d": true, "sizeRange": [0, 500], "coverageRange": [0, 1], "elevationScale": 5}, "hidden": false, "textLabel": [{"field": null, "color": [255, 255, 255], "size": 18, "offset": [0, 0], "anchor": "start", "alignment": "center"}]}, "visualChannels": {"colorField": {"name": "label", "type": "integer"}, "colorScale": "quantize", "sizeField": {"name": "amenity_hunting_stand", "type": "integer"}, "sizeScale": "linear", "coverageField": null, "coverageScale": "linear"}}], "interactionConfig": {"tooltip": {"fieldsToShow": {"clusters": [{"name": "h3", "format": null}, {"name": "amenity_hunting_stand", "format": null}]}, "compareMode": false, "compareType": "absolute", "enabled": true}, "brush": {"size": 0.5, "enabled": false}, "geocoder": {"enabled": false}, "coordinate": {"enabled": false}}, "layerBlending": "normal", "splitMaps": [], "animationConfig": {"currentTime": null, "speed": 1}}, "mapState": {"bearing": 24, "dragRotate": true, "latitude": 51.11327159384743, "longitude": 16.98457084567424, "pitch": 50, "zoom": 10.451941083083048, "isSplit": false}, "mapStyle": {"styleType": "satellite", "topLayerGroups": {}, "visibleLayerGroups": {}, "threeDBuildingColor": [3.7245996603793508, 6.518049405663864, 13.036098811327728], "mapStyles": {}}}}
+{
+    "version": "v1",
+    "config": {
+        "visState": {
+            "filters": [],
+            "layers": [
+                {
+                    "id": "phu464",
+                    "type": "hexagonId",
+                    "config": {
+                        "dataId": "clusters",
+                        "label": "h3",
+                        "color": [
+                            34,
+                            63,
+                            154
+                        ],
+                        "columns": {
+                            "hex_id": "h3"
+                        },
+                        "isVisible": true,
+                        "visConfig": {
+                            "opacity": 0.45,
+                            "colorRange": {
+                                "name": "Uber Viz Diverging 0",
+                                "type": "diverging",
+                                "category": "Uber",
+                                "colors": [
+                                    "#00939C",
+                                    "#FEEEE8",
+                                    "#C22E00"
+                                ]
+                            },
+                            "coverage": 1,
+                            "enable3d": true,
+                            "sizeRange": [
+                                0,
+                                500
+                            ],
+                            "coverageRange": [
+                                0,
+                                1
+                            ],
+                            "elevationScale": 5
+                        },
+                        "hidden": false,
+                        "textLabel": [
+                            {
+                                "field": null,
+                                "color": [
+                                    255,
+                                    255,
+                                    255
+                                ],
+                                "size": 18,
+                                "offset": [
+                                    0,
+                                    0
+                                ],
+                                "anchor": "start",
+                                "alignment": "center"
+                            }
+                        ]
+                    },
+                    "visualChannels": {
+                        "colorField": {
+                            "name": "label",
+                            "type": "integer"
+                        },
+                        "colorScale": "quantize",
+                        "sizeField": {
+                            "name": "amenity_hunting_stand",
+                            "type": "integer"
+                        },
+                        "sizeScale": "linear",
+                        "coverageField": null,
+                        "coverageScale": "linear"
+                    }
+                }
+            ],
+            "interactionConfig": {
+                "tooltip": {
+                    "fieldsToShow": {
+                        "clusters": [
+                            {
+                                "name": "h3",
+                                "format": null
+                            },
+                            {
+                                "name": "amenity_hunting_stand",
+                                "format": null
+                            }
+                        ]
+                    },
+                    "compareMode": false,
+                    "compareType": "absolute",
+                    "enabled": true
+                },
+                "brush": {
+                    "size": 0.5,
+                    "enabled": false
+                },
+                "geocoder": {
+                    "enabled": false
+                },
+                "coordinate": {
+                    "enabled": false
+                }
+            },
+            "layerBlending": "normal",
+            "splitMaps": [],
+            "animationConfig": {
+                "currentTime": null,
+                "speed": 1
+            }
+        },
+        "mapState": {
+            "bearing": 24,
+            "dragRotate": true,
+            "latitude": 51.11327159384743,
+            "longitude": 16.98457084567424,
+            "pitch": 50,
+            "zoom": 10.451941083083048,
+            "isSplit": false
+        },
+        "mapStyle": {
+            "styleType": "satellite",
+            "topLayerGroups": {},
+            "visibleLayerGroups": {},
+            "threeDBuildingColor": [
+                3.7245996603793508,
+                6.518049405663864,
+                13.036098811327728
+            ],
+            "mapStyles": {}
+        }
+    }
+}

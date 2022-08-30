@@ -3,7 +3,8 @@ from torch import nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
 from typing import List, Tuple
-from torchmetrics.functional import f1
+from torchmetrics.functional import f1_score as f1
+
 
 class BinaryNN(pl.LightningModule):
     def __init__(self, encoder_sizes):
@@ -26,12 +27,10 @@ class BinaryNN(pl.LightningModule):
     def forward(self, Xt: torch.Tensor, Xc: torch.Tensor):
         Xt_em = self.encoder(Xt)
         Xc_em = self.encoder(Xc)
-        scores = torch.mul(Xt_em, Xc_em).sum(dim=1)
-        return scores
+        return torch.mul(Xt_em, Xc_em).sum(dim=1)
     
     def predict(self, Xt: torch.Tensor, Xc: torch.Tensor):
-        probas = F.sigmoid(self(Xt, Xc))
-        return probas
+        return F.sigmoid(self(Xt, Xc))
 
     def training_step(self, batch, batch_idx):
         Xt, Xc, Xn, y_pos, y_neg, *_ = batch
