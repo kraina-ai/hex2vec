@@ -67,25 +67,43 @@ def prepare_city_path(base_path: Path, city: str) -> Path:
 
 
 def get_hexes_polygons_for_city(
-    city: Union[str, List[str]], resolution: int, use_cache=False
+    city: Union[str, List[str]], resolution: int, use_cache=False, data_dir=DATA_RAW_DIR
 ) -> GeoDataFrame:
     city_name = city if type(city) == str else city[0]
-    city_path = prepare_city_path(DATA_RAW_DIR, city_name)
+    city_path = prepare_city_path(data_dir, city_name)
     cache_file = city_path.joinpath(f"h3_{resolution}.geojson")
     if use_cache and cache_file.exists() and cache_file.is_file():
         return gpd.read_file(cache_file)
-    bounding_gdf = get_bounding_gdf(city)
+    return save_hexes_polygons_for_city(city_path, resolution, return_gdf=True)
+
+
+def save_hexes_polygons_for_city(
+    city_path: Path,
+    resolution: int,
+    custom_bounding_gdf: GeoDataFrame = None,
+    return_gdf: bool = False,
+) -> GeoDataFrame:
+    cache_file = city_path.joinpath(f"h3_{resolution}.geojson")
+    bounding_gdf = (
+        get_bounding_gdf(city_path.stem)
+        if custom_bounding_gdf is None
+        else custom_bounding_gdf
+    )
     if type(bounding_gdf.geometry[0]) == MultiPolygon:
         bounding_gdf = bounding_gdf.explode(ignore_index=True).reset_index(drop=True)
     hexes_gdf = get_hexes_for_place(bounding_gdf, resolution, return_gdf=True)
     hexes_gdf.to_file(cache_file, driver="GeoJSON")
-    return hexes_gdf
+    if return_gdf:
+        return hexes_gdf
 
 
 def add_h3_indices(
-    gdf: GeoDataFrame, city: Union[str, List[str]], resolution: int
+    gdf: GeoDataFrame,
+    city: Union[str, List[str]],
+    resolution: int,
+    data_dir=DATA_RAW_DIR,
 ) -> GeoDataFrame:
-    hexes_polygons_gdf = get_hexes_polygons_for_city(city, resolution)
+    hexes_polygons_gdf = get_hexes_polygons_for_city(city, resolution, data_dir=data_dir)
     return gpd.sjoin(gdf, hexes_polygons_gdf, how="inner", predicate="intersects")
 
 
@@ -105,12 +123,34 @@ def add_h3_indices_to_city(
             if tag_gdf is not None:
                 print(f"Adding h3 indices to {city_name} {tag}")
                 tag_gdf = tag_gdf
-                h3_gdf = add_h3_indices(tag_gdf, city, resolution)
+                h3_gdf = add_h3_indices(tag_gdf, city, resolution, data_dir=DATA_RAW_DIR)
                 h3_gdf.to_pickle(result_path)
             else:
                 print(f"Tag {tag} doesn't exist for city {city}, skipping...")
         # else:
         #     print(f"{result_path} already exists, skipping...")
+
+
+def add_h3_indices_to_city_explicit_paths(
+    city: str,
+    resolution: int,
+    data_dir: Path = None,
+    interim_dir: Path = None,
+) -> GeoDataFrame:
+    city_name = city if type(city) == str else city[0]
+    city_destination_path = prepare_city_path(interim_dir, city_name)
+    for tag in TOP_LEVEL_OSM_TAGS:
+        result_path = city_destination_path.joinpath(f"{tag}_{resolution}.pkl")
+        if not result_path.exists():
+            print(f"Loading data for {city_name} {tag}")
+            tag_gdf = load_city_tag(city_name, tag, data_dir=data_dir)
+            if tag_gdf is not None:
+                print(f"Adding h3 indices to {city_name} {tag}")
+                tag_gdf = tag_gdf
+                h3_gdf = add_h3_indices(tag_gdf, city, resolution, data_dir=data_dir)
+                h3_gdf.to_pickle(result_path)
+            else:
+                print(f"Tag {tag} doesn't exist for city {city}, skipping...")
 
 
 def merge_all_tags_for_city(city: str, resolution: int):
@@ -145,10 +185,12 @@ def group_city_tags(
     tags=TOP_LEVEL_OSM_TAGS,
     filter_values: Dict[str, str] = None,
     fill_missing=True,
+    data_dir: Path=DATA_RAW_DIR,
+    save_dir: Path=DATA_PROCESSED_DIR,
 ) -> pd.DataFrame:
     dfs = []
     for tag in tags:
-        df = load_city_tag_h3(city, tag, resolution, filter_values)
+        df = load_city_tag_h3(city, tag, resolution, filter_values, data_path=data_dir)
         if df is not None and not df.empty:
             tag_grouped = group_df_by_tag_values(df, tag)
         else:
@@ -163,13 +205,15 @@ def group_city_tags(
     results = pd.concat(dfs, axis=0)
     results = results.fillna(0).groupby("h3").sum().reset_index()
 
-    city_destination_path = prepare_city_path(DATA_PROCESSED_DIR, city)
+    city_destination_path = prepare_city_path(save_dir, city)
     file_path = city_destination_path.joinpath(f"{resolution}.pkl")
     results.to_pickle(file_path)
     return results
 
 
-def group_city_top_level_tags(city: str, resolution: int, tags=TOP_LEVEL_OSM_TAGS) -> pd.DataFrame:
+def group_city_top_level_tags(
+    city: str, resolution: int, tags=TOP_LEVEL_OSM_TAGS
+) -> pd.DataFrame:
     dfs = []
     for tag in tags:
         df = load_city_tag_h3(city, tag, resolution)

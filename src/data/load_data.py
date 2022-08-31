@@ -102,9 +102,8 @@ def filter_gdf(
 
 
 def load_filter(
-    filter_name: str, values_to_drop: Dict[str, List[str]] = None
+    filter_file_path: Path, values_to_drop: Dict[str, List[str]] = None
 ) -> Dict[str, List[str]]:
-    filter_file_path = FILTERS_DIR.joinpath(filter_name)
     if filter_file_path.exists() and filter_file_path.is_file():
         with filter_file_path.open(mode="rt") as f:
             filter_values = json.load(f)
@@ -116,7 +115,7 @@ def load_filter(
     else:
         available_filters = [f.name for f in FILTERS_DIR.iterdir() if f.is_file()]
         raise FileNotFoundError(
-            f"Filter {filter_name} not found. Available filters: {available_filters}"
+            f"Filter {filter_file_path.stem} not found. Available filters: {available_filters}"
         )
 
 

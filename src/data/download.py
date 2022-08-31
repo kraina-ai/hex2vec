@@ -7,14 +7,9 @@ from tqdm import tqdm
 from shapely.geometry import Polygon
 from .utils import TOP_LEVEL_OSM_TAGS
 
-def ensure_geometry_type(
-    df: GeoDataFrame, geometry_column: str = "geometry"
-) -> GeoDataFrame:
+def ensure_geometry_type(df: GeoDataFrame, geometry_column: str = "geometry") -> GeoDataFrame:
     def ensure_geometry_type_correct(geometry):
-        if type(geometry) == str:
-            return wkt.loads(geometry)
-        else:
-            return geometry
+        return wkt.loads(geometry) if type(geometry) == str else geometry
 
     if geometry_column in df.columns:
         df[geometry_column] = df[geometry_column].apply(ensure_geometry_type_correct)
@@ -22,15 +17,12 @@ def ensure_geometry_type(
 
 
 def download_whole_city(city_name: Union[str, List[str]], save_path: Path, timeout: int = 10000):
-    if type(city_name) == str:
-        name = city_name
-    else:
-        name = city_name[0]
+    name = city_name if type(city_name) == str else city_name[0]
     print(name)
     area_path = save_path.joinpath(name)
     area_path.mkdir(parents=True, exist_ok=True)
     for tag in tqdm(TOP_LEVEL_OSM_TAGS):
-        tag_path = area_path.joinpath(tag + ".pkl")
+        tag_path = area_path.joinpath(f"{tag}.pkl")
         if not tag_path.exists():
             tag_gdf = download_whole_osm_tag(city_name, tag, timeout)
             if tag_gdf.empty:
@@ -59,10 +51,8 @@ def download_specific_tags(
 
 
 def get_bounding_gdf(city: str) -> GeoDataFrame:
-    # query = {"city": city}
     query = city
-    gdf = ox.geocode_to_gdf(query)
-    return gdf
+    return ox.geocode_to_gdf(query)
 
 
 def get_bounding_polygon(city: str) -> Polygon:
