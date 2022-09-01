@@ -1,4 +1,5 @@
 import os
+import h3
 from geopandas import GeoDataFrame
 import numpy as np
 from numpy.lib.function_base import select
@@ -86,6 +87,9 @@ def load_city_tag_h3(
     path = data_path.joinpath(city, f"{tag}_{resolution}.pkl")
     if path.exists():
         gdf = load_gdf(path)
+        gdf[tag] = gdf[tag].str.split(";")
+        gdf = gdf.explode(tag)
+        gdf[tag] = gdf[tag].str.strip()
         gdf = filter_gdf(gdf, tag, filter_values)
         return gdf
     else:

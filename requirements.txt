@@ -21,3 +21,5 @@ umap
 wandb
 selenium
 alphashape
+pytorch-lightning
+

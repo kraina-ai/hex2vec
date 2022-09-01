@@ -171,13 +171,10 @@ def merge_all_tags_for_city(city: str, resolution: int):
 
 
 def group_df_by_tag_values(df, tag: str):
-    tags = df.reset_index(drop=True)[["h3", tag]]
-    indicators = tags[[tag]].pivot(columns=tag, values=tag)
-    indicators[indicators.notnull()] = 1
-    indicators.fillna(0, inplace=True)
+    tmp = df.reset_index(drop=True)[["h3", tag]].copy(deep=True)
+    indicators = pd.get_dummies(tmp, columns=[tag]).groupby("h3").sum().astype('int16')
     indicators = indicators.add_prefix(f"{tag}_")
-    return pd.concat([tags, indicators], axis=1).groupby("h3").sum().reset_index()
-
+    return indicators.reset_index()
 
 def group_city_tags(
     city: str,
@@ -187,6 +184,7 @@ def group_city_tags(
     fill_missing=True,
     data_dir: Path=DATA_RAW_DIR,
     save_dir: Path=DATA_PROCESSED_DIR,
+    save=True,
 ) -> pd.DataFrame:
     dfs = []
     for tag in tags:
@@ -197,17 +195,16 @@ def group_city_tags(
             tag_grouped = pd.DataFrame()
         if fill_missing and filter_values is not None:
             columns_names = [f"{tag}_{value}" for value in filter_values[tag]]
-            for c_name in columns_names:
-                if c_name not in tag_grouped.columns:
-                    tag_grouped[c_name] = 0
+            tag_grouped[[c for c in columns_names if c not in tag_grouped.columns]] = 0
         dfs.append(tag_grouped)
 
     results = pd.concat(dfs, axis=0)
-    results = results.fillna(0).groupby("h3").sum().reset_index()
 
-    city_destination_path = prepare_city_path(save_dir, city)
-    file_path = city_destination_path.joinpath(f"{resolution}.pkl")
-    results.to_pickle(file_path)
+    results = results.fillna(0).groupby("h3").sum().astype('Int16').reset_index()
+    if save:
+        city_destination_path = prepare_city_path(save_dir, city)
+        file_path = city_destination_path.joinpath(f"{resolution}.pkl")
+        results.to_pickle(file_path)
     return results
 
 
