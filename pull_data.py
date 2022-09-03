@@ -12,7 +12,9 @@ from src.data.make_dataset import (
     save_hexes_polygons_for_city,
 )
 from src.data.load_data import load_filter
+from src.data.utils import TOP_LEVEL_OSM_TAGS
 from src.settings import DATA_DIR, DATA_RAW_DIR, FILTERS_DIR
+from src.utils.tesselate_amazon_data import group_hex_tags
 
 
 def _check_dir_exists(dir_path: str) -> Path:
@@ -25,6 +27,27 @@ def _iter_cities(data_dir: Path) -> Iterable[Path]:
     for city in data_dir.iterdir():
         if city.is_dir():
             yield city
+
+
+@click.command()
+@click.argument("data_dir", type=click.Path(exists=True))
+@click.argument("output_dir", type=click.Path(exists=True))
+@click.option("--resolution", type=int, default=9, help="H3 resolution")
+
+def group_city_hexagons(data_dir: str, output_dir: str, resolution: int):
+    data_dir = _check_dir_exists(data_dir)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(exist_ok=True, parents=True)
+    
+    group_hex_tags(
+        hex_parent_dir=data_dir,
+        tag_list=TOP_LEVEL_OSM_TAGS,
+        output_dir=data_dir,
+        resolution=9,
+        filter_values=load_filter(Path("/Users/max/Development/green-last-mile/hex2vec/filters/from_wiki.json")),    
+    )
+
+
 
 
 @click.command()
@@ -157,6 +180,28 @@ def group_all_city_tags(data_dir: str, output_dir: str, resolution: int, filter_
         group_city_tags(city.stem, resolution, filter_values=filter_tags, data_dir=data_dir, save_dir=output_path)
 
 
+@click.command()
+@click.argument("data-dir")
+@click.argument("output-dir")
+@click.option("--resolution", default=9, help="hexbin size")
+@click.option("--filter-file", default=lambda: FILTERS_DIR.joinpath("from_wiki.json"), help="Path to json file with key value pairs to filter on")
+def tesselate_and_pull_city(data_dir: str, output_dir: str, resolution: int, filter_file: str) -> None:
+    """
+    Group all tags for each city into a single dataframe.
+
+    data_dir (str): Path to the data directory\\n
+    output_dir (str): Path to the output directory
+    """
+    data_dir = _check_dir_exists(data_dir)
+    output_path = Path(output_dir)
+    output_path.mkdir(exist_ok=True)
+    filter_tags = load_filter(Path(filter_file)) if filter_file else None
+    for city in _iter_cities(data_dir):
+        print(f"Processing {city.stem}")
+        group_city_tags(city.stem, resolution, filter_values=filter_tags, data_dir=data_dir, save_dir=output_path)
+
+
+
 @click.group()
 def main():
     """
@@ -171,6 +216,7 @@ main.add_command(add_h3_indices)
 main.add_command(simplify_data)
 main.add_command(create_h3_indices)
 main.add_command(group_all_city_tags)
+main.add_command(group_city_hexagons)
 
 if __name__ == "__main__":
     try:

@@ -4,9 +4,10 @@ from typing import Dict, List, Union
 
 import h3
 import pyproj
+import numpy as np
 import pandas as pd
 import geopandas as gpd
-from sklearn.neighbors import BallTree
+from sklearn.neighbors import BallTree, KDTree
 from shapely.geometry import Point, Polygon
 from src.data.load_data import load_city_tag, load_filter
 
@@ -15,7 +16,9 @@ from src.utils.tesselate_amazon_data import group_h3_tags
 
 
 class NearestNeighbor:
-    def __init__(self, data_dir: Path, filter_path: Path, radius: float) -> None:
+    def __init__(
+        self, data_dir: Path, filter_path: Path, radius: float, tags: List[str]
+    ) -> None:
         """
 
         Args:
@@ -26,6 +29,7 @@ class NearestNeighbor:
         self._data_dir = data_dir
         self._filter = load_filter(filter_path)
         self._radius = radius
+        self._tags = tags
 
         # set the UTM epsg code
         self._utm_proj = pyproj.Proj("epsg:32619")
@@ -38,7 +42,7 @@ class NearestNeighbor:
         # store the utm polygons of the hexagons that have been visited, to reduce read time
         self._visited_utm_polygons = {}
 
-    def _compose_table(self, hex_id: str) -> Dict[str, gpd.GeoDataFrame]:
+    def _compose_table(self, hex_id: str) -> gpd.GeoDataFrame:
         """
         Compose a table of all shapes in the hexagon.
         """
@@ -46,14 +50,33 @@ class NearestNeighbor:
             return self._visited_hexes[hex_id]
 
         if not (self._data_dir / hex_id).exists():
-            return {}
+            return None
 
-        dfs = {
-            file.stem: load_city_tag(file.parent, file.stem).to_crs(self._utm_proj.crs)
-            for file in self._data_dir.joinpath(hex_id).iterdir()
-            if file.suffix == ".pkl"
-        }
-        self._visited_hexes[hex_id] = dfs
+        # just create a single dataframe for all tags
+        df = pd.concat(
+            [
+                load_city_tag(
+                    file.parent, file.stem, filter_values=self._filter
+                ).to_crs(self._utm_proj.crs)
+                for file in self._data_dir.joinpath(hex_id).iterdir()
+                if (file.suffix == ".pkl") and (file.stem in self._tags)
+            ]
+        )
+
+        # df.fillna("", inplace=True)
+
+        # create a centroid column for each of the points
+        df["utm_centroid"] = df.geometry.centroid
+
+        # # sort by the distance to the center of the hexagon
+        # df["distance"] = df.center.distance(
+        #     Point(self._get_utm_coords(*h3.h3_to_geo(hex_id)))
+        # )
+        # df.sort_values(by="distance",).reset_index(
+        #     drop=True
+        # ).drop("distance", axis=1, inplace=True)
+
+        self._visited_hexes[hex_id] = df
         return self._visited_hexes[hex_id]
 
     def _pop_non_neighbors(self, center_hex: str) -> List[int]:
@@ -110,76 +133,97 @@ class NearestNeighbor:
     #     return self._utm_proj(x, y, inverse=True)
 
     # #  below comes from https://autogis-site.readthedocs.io/en/latest/notebooks/L3/06_nearest-neighbor-faster.html
-    # def get_nearest(self, src_points, candidates, k_neighbors=20, radius=30):
-    #     #TODO: reinvestigate this function if needed
-    #     """Find nearest neighbors for all source points from a set of candidate points"""
+    def get_nearest(
+        self,
+        src_points,
+        candidates,
+        k_neighbors=10,
+    ):
+        # TODO: reinvestigate this function if needed
+        """Find nearest neighbors for all source points from a set of candidate points"""
 
-    #     # Create tree from the candidate points
-    #     tree = BallTree(candidates, leaf_size=15, metric='haversine')
+        # Create tree from the candidate points
+        tree = KDTree(candidates, leaf_size=15, metric="minkowski")
 
-    #     # Find closest points and distances
-    #     distances, indices = tree.query(src_points, k=k_neighbors)
+        # Find closest points and distances
+        indices = tree.query_radius(src_points, r=self._radius)
 
-    #     # Transpose to get distances and indices into arrays
-    #     distances = distances.transpose()
-    #     indices = indices.transpose()
+        # Transpose to get distances and indices into arrays
+        # distances = distances.transpose()
+        # indices = indices.transpose()
 
-    #     # Get closest indices and distances (i.e. array at index 0)
-    #     # note: for the second closest points, you would take index 1, etc.
-    #     closest = indices[0]
-    #     closest_dist = distances[0]
+        # # Get closest indices and distances (i.e. array at index 0)
+        # # note: for the second closest points, you would take index 1, etc.
+        # closest = indices[0]
+        # closest_dist = distances[0]
 
-    #     # Return indices and distances
-    #     return (closest, closest_dist)
+        # Return indices and distances
+        return indices
 
-    # def _count_nearest_tags(self, hex_id: str, tag: str, indices: List[int]) -> Dict[str, int]:
-    #     """
-    #     Count the nearest tags in a hexagon.
+    def nearest_neighbor(
+        self, left_gdf, right_gdf, left_col=None, right_col=None, return_dist=False
+    ):
+        """
+        For each point in left_gdf, find closest point in right GeoDataFrame and return them.
 
-    #     Args:
-    #         hex_id: Hexagon ID
-    #         indices: Indices of nearest neighbors
-    #     """
-    #     # get the tags from the hexagon
-    #     tags = self._visited_hexes[hex_id][tag][tag].iloc[indices].value_counts()
-    #     return tags.to_dict()
+        NOTICE: Assumes that the input Points are in UTM projection, and are in the same projection.
+        """
+        left_geom_col = left_col or left_gdf.geometry.name
+        right_geom_col = right_col or right_gdf.geometry.name
+        # Ensure that index in right gdf is formed of sequential numbers
+        right_gdf = right_gdf.reset_index(drop=True)
+        # Parse coordinates from points and insert them into a numpy array as RADIANS
+        # Notice: should be in Lat/Lon format
+        left = np.array(
+            list(zip(left_gdf[left_geom_col].x, left_gdf[left_geom_col].y))
+            # .apply(lambda geom: (geom.y * np.pi / 180, geom.x * np.pi / 180))
+            # .to_list()
+        )
+        right = np.array(
+            list(zip(right_gdf[right_geom_col].x, right_gdf[right_geom_col].y))
+            # .apply(lambda geom: (geom.y * np.pi / 180, geom.x * np.pi / 180))
+            # .to_list()
+        )
 
-    # def nearest_neighbor(self, left_gdf, right_gdf, left_col=None, right_col=None, return_dist=False):
-    #     """
-    #     For each point in left_gdf, find closest point in right GeoDataFrame and return them.
+        # Find the nearest points
+        # -----------------------
+        # closest ==> index in right_gdf that corresponds to the closest point
+        # dist ==> distance between the nearest neighbors (in radians)
+        closest = self.get_nearest(src_points=left, candidates=right)
 
-    #     NOTICE: Assumes that the input Points are in WGS84 projection (lat/lon).
-    #     """
-    #     left_geom_col = left_col or left_gdf.geometry.name
-    #     right_geom_col = right_col or right_gdf.geometry.name
+        # iterate over the closest points and create a new dataframe
+        columns = right_gdf.columns
+        all_indices = []
+        for c in closest:
+            all_indices.extend(c)
+        pivoted = pd.get_dummies(
+            right_gdf.loc[all_indices, [tag for tag in self._tags if tag in columns]]
+        )
 
-    #     # Ensure that index in right gdf is formed of sequential numbers
-    #     right = right_gdf.copy().reset_index(drop=True)
+        # sum for each of the groups:
+        records = []
+        for i, c in enumerate(closest):
+            if len(c):
+                counts = pivoted.loc[c, :].sum(axis=0)
+                records.append({'index': left_gdf.index[i], **counts.to_dict()})
 
-    #     # Parse coordinates from points and insert them into a numpy array as RADIANS
-    #     # Notice: should be in Lat/Lon format
-    #     left_radians = np.array(left_gdf[left_geom_col].apply(lambda geom: (geom.y * np.pi / 180, geom.x * np.pi / 180)).to_list())
-    #     right_radians = np.array(right[right_geom_col].apply(lambda geom: (geom.y * np.pi / 180, geom.x * np.pi / 180)).to_list())
+        # return the records
+        return pd.DataFrame(records).set_index('index')
 
-    #     # Find the nearest points
-    #     # -----------------------
-    #     # closest ==> index in right_gdf that corresponds to the closest point
-    #     # dist ==> distance between the nearest neighbors (in radians)
-    #     closest, dist = get_nearest(src_points=left_radians, candidates=right_radians)
 
-    #     # Return points from right GeoDataFrame that are closest to points in left GeoDataFrame
-    #     closest_points = right.loc[closest]
+    def _count_nearest_tags(
+        self, hex_id: str, tag: str, indices: List[int]
+    ) -> Dict[str, int]:
+        """
+        Count the nearest tags in a hexagon.
 
-    #     # Ensure that the index corresponds the one in left_gdf
-    #     closest_points = closest_points.reset_index(drop=True)
-
-    #     # Add distance if requested
-    #     if return_dist:
-    #         # Convert to meters from radians
-    #         earth_radius = 6371000  # meters
-    #         closest_points['distance'] = dist * earth_radius
-
-    #     return closest_points
+        Args:
+            hex_id: Hexagon ID
+            indices: Indices of nearest neighbors
+        """
+        # get the tags from the hexagon
+        tags = self._visited_hexes[hex_id][tag][tag].iloc[indices].value_counts()
+        return tags.to_dict()
 
     # def _get_nearest_tags(self, hex_id: str, tag: str, indices: List[int]) -> Dict[str, int]:
     def prepare_df_apply(
@@ -198,10 +242,12 @@ class NearestNeighbor:
         ]
         gdf = pd.concat([gdf, pd.DataFrame(columns=tag_columns)], axis=1)
         # gdf.fillna(0, inplace=True)
-        gdf["circle_geom"] = gdf.geometry.to_crs(self._utm_proj.crs).buffer(
-            self._radius
-        )
+        gdf["utm_centroid"] = gdf.geometry.to_crs(self._utm_proj.crs)
+        gdf["circle_geom"] = gdf["utm_centroid"].buffer(self._radius)
         gdf.reset_index(drop=True, inplace=True)
+
+        # Add the h3 5 level hexagon ID
+        gdf["h3_5"] = gdf.h3.apply(h3.h3_to_parent, res=5)
         return gdf
 
     def count_tags(
@@ -217,13 +263,17 @@ class NearestNeighbor:
         Returns:
             gpd.GeoDataFrame: _description_
         """
-        hex_id = gdf.h3.iloc[0]
+        #  create a copy for return
+        gdf = gdf.copy()
+        # hex_id = gdf.h3_5.iloc[0]
+        # print(hex_id)
+        hex_id = gdf.h3_5.iloc[0]
         print(hex_id)
         needed_hex = [
-            h3.h3_to_parent(hex_id, hex_file_resolution),
+            hex_id,
         ]
+
         # check if all the circles are within the parent hexagon
-        # if not, read in the others that we need
         contained = gdf["circle_geom"].within(self._h3_to_utm_polygon(needed_hex[0]))
         non_contained = sum(~contained)
         if non_contained > 0:
@@ -236,43 +286,21 @@ class NearestNeighbor:
                 if gdf["circle_geom"].overlaps(neighbor[1]).any():
                     needed_hex.append(neighbor[0])
 
-        value_counts = {}
-        # for each tag, count the number of points in each hexagon. will have to think of a more efficient way to do this
-        for circle in gdf[["circle_geom"]].itertuples():
-            value_counts[circle[0]] = {}
-            for hex_id in needed_hex:
-                for tag, tag_df in self._compose_table(hex_id).items():
-                    # if tag not in value_counts[circle[0]].keys():
-                    #     value_counts[circle[0]] = {}
+        # for hex_id in needed_hex:
+        tag_df = pd.concat([self._compose_table(hex_id) for hex_id in needed_hex], axis=0)
+            # if tag not in value_counts[circle[0]].keys():
+        #     value_counts[circle[0]] = {}
+        # print("calculating for hex", hex_id)
+        d = self.nearest_neighbor(
+            left_gdf=gdf,
+            right_gdf=tag_df,
+            left_col="utm_centroid",
+            right_col="utm_centroid",
+        )
 
-                    values = tag_df.loc[
-                        tag_df["geometry"].intersects(circle[1])
-                        | tag_df["geometry"].within(circle[1]),
-                        ["osmid", tag],
-                    ].to_dict("records")
-
-                    if len(values) > 0:
-                        for _d in values:
-                            osmid, value = _d["osmid"], _d[tag]
-                            if value in self._filter[tag]:
-                                tag_name = f"{tag}_{value}"
-                                if tag_name not in value_counts[circle[0]].keys():
-                                    value_counts[circle[0]][tag_name] = [osmid]
-                                else:
-                                    value_counts[circle[0]][tag_name].append(osmid)
-
-        # sum the counts for each tag
-        value_counts = {
-            k: {k2: len(set(v2)) for k2, v2 in v.items()}
-            for k, v in value_counts.items()
-        }
-
-        # add the counts to the dataframe
-        new_df = pd.DataFrame(value_counts).T
-
-        # merge the new dataframe with the old one
-        gdf[new_df.columns] = new_df
-
+        # update the gdf with the values in d
+        gdf.update(d)
+ 
         self._pop_non_neighbors(
             hex_id,
         )
