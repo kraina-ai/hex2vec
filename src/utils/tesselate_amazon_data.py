@@ -87,6 +87,8 @@ async def pull_tags_for_hex(
     row: pd.Series,
     city_dir: Path,
     tag_list: str,
+    simplify_data: bool = True,
+    force_pull: bool = False
 ) -> pd.Series:
 
     # make the directory
@@ -94,13 +96,13 @@ async def pull_tags_for_hex(
     hex_dir.mkdir(parents=True, exist_ok=True)
     print("running for hex", row["h3"])
     for tag in tag_list:
-        if not hex_dir.joinpath(f"{tag}.pkl").exists():
+        if not hex_dir.joinpath(f"{tag}.pkl").exists() or force_pull:
             await asyncio.sleep(random() * 3)
             gdf = await async_ox_geometries(row.geometry, tags={tag: True})
             # clean the data
             if not gdf.empty:
-                gdf = ensure_geometry_type(gdf)
-                gdf = gdf.reset_index()[["osmid", tag, "geometry"]]
+                gdf = ensure_geometry_type(gdf)                
+                gdf = gdf.reset_index()[["osmid", tag, "geometry"]] if simplify_data else gdf.reset_index()
                 # save the gdf
                 gdf.to_pickle(
                     hex_dir.joinpath(f"{tag}.pkl").absolute(),
@@ -114,13 +116,15 @@ async def pull_tags_for_hex_gdf(
     hex_gdf: gpd.GeoDataFrame,
     tag_list: str,
     resolution: int,
+    simplify_data: bool = True,
+    force_pull: bool = False
 ) -> gpd.GeoDataFrame:
 
     # make the directory
     r_dir = city_dir.joinpath(f"resolution_{resolution}")
     r_dir.mkdir(parents=True, exist_ok=True)
     return await asyncio.gather(
-        *[pull_tags_for_hex(row[1], r_dir, tag_list) for row in hex_gdf.iterrows()]
+        *[pull_tags_for_hex(row[1], r_dir, tag_list, simplify_data, force_pull) for row in hex_gdf.iterrows()]
     )
     # return None
     # # join the data
