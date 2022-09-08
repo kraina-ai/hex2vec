@@ -195,10 +195,11 @@ def group_h3_tags(
         # fill missing values, using pandas concat
         if fill_missing and filter_values is not None:
             columns_names = [f"{tag}_{value}" for value in filter_values[tag] if f"{tag}_{value}" not in tag_grouped.columns]
-            tag_grouped = pd.concat([tag_grouped, pd.DataFrame(columns=columns_names)], axis=1)
+            tag_grouped = pd.concat([tag_grouped, pd.DataFrame(columns=columns_names)], axis=1, verify_integrity=True)
         dfs.append(tag_grouped)
 
-    results = pd.concat(dfs, axis=0)
+    results = pd.concat(dfs, axis=0, )
+
 
     results = results.fillna(0).groupby("h3").sum()
     return results.reindex(index=unique_h3, fill_value=0).astype("Int16").reset_index()

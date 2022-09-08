@@ -8,7 +8,7 @@ from tqdm import tqdm
 class H3NeighborDataset(Dataset):
     def __init__(self, data: pd.DataFrame):
         self.data = data
-        self.data_torch = torch.Tensor(self.data.to_numpy())
+        self.data_torch = torch.Tensor(self.data.to_numpy(dtype=np.float32))
         all_indices = set(data.index)
 
         self.inputs = []

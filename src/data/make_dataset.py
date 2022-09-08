@@ -103,7 +103,9 @@ def add_h3_indices(
     resolution: int,
     data_dir=DATA_RAW_DIR,
 ) -> GeoDataFrame:
-    hexes_polygons_gdf = get_hexes_polygons_for_city(city, resolution, data_dir=data_dir)
+    hexes_polygons_gdf = get_hexes_polygons_for_city(
+        city, resolution, data_dir=data_dir
+    )
     return gpd.sjoin(gdf, hexes_polygons_gdf, how="inner", predicate="intersects")
 
 
@@ -123,7 +125,9 @@ def add_h3_indices_to_city(
             if tag_gdf is not None:
                 print(f"Adding h3 indices to {city_name} {tag}")
                 tag_gdf = tag_gdf
-                h3_gdf = add_h3_indices(tag_gdf, city, resolution, data_dir=DATA_RAW_DIR)
+                h3_gdf = add_h3_indices(
+                    tag_gdf, city, resolution, data_dir=DATA_RAW_DIR
+                )
                 h3_gdf.to_pickle(result_path)
             else:
                 print(f"Tag {tag} doesn't exist for city {city}, skipping...")
@@ -172,9 +176,9 @@ def merge_all_tags_for_city(city: str, resolution: int):
 
 def group_df_by_tag_values(df, tag: str):
     tmp = df.reset_index(drop=True)[["h3", tag]].copy(deep=True)
-    indicators = pd.get_dummies(tmp, columns=[tag]).groupby("h3").sum().astype('int16')
-    indicators = indicators.add_prefix(f"{tag}_")
+    indicators = pd.get_dummies(tmp, columns=[tag], prefix=tag).groupby("h3").sum().astype("int16")
     return indicators.reset_index()
+
 
 def group_city_tags(
     city: str,
@@ -182,8 +186,8 @@ def group_city_tags(
     tags=TOP_LEVEL_OSM_TAGS,
     filter_values: Dict[str, str] = None,
     fill_missing=True,
-    data_dir: Path=DATA_RAW_DIR,
-    save_dir: Path=DATA_PROCESSED_DIR,
+    data_dir: Path = DATA_RAW_DIR,
+    save_dir: Path = DATA_PROCESSED_DIR,
     save=True,
 ) -> pd.DataFrame:
     dfs = []
@@ -200,7 +204,7 @@ def group_city_tags(
 
     results = pd.concat(dfs, axis=0)
 
-    results = results.fillna(0).groupby("h3").sum().astype('Int16').reset_index()
+    results = results.fillna(0).groupby("h3").sum().astype("Int16").reset_index()
     if save:
         city_destination_path = prepare_city_path(save_dir, city)
         file_path = city_destination_path.joinpath(f"{resolution}.pkl")

@@ -143,7 +143,7 @@ class NearestNeighbor:
         """Find nearest neighbors for all source points from a set of candidate points"""
 
         # Create tree from the candidate points
-        tree = KDTree(candidates, leaf_size=15, metric="minkowski")
+        tree = KDTree(candidates, leaf_size=10, metric="minkowski")
 
         # Find closest points and distances
         indices = tree.query_radius(src_points, r=self._radius)

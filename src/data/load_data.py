@@ -1,3 +1,4 @@
+from audioop import add
 import os
 import h3
 from geopandas import GeoDataFrame
@@ -134,9 +135,15 @@ def load_processed_dataset(
     drop_cities: List[str] = None,
     select_tags: List[str] = None,
     data_dir: Path = DATA_PROCESSED_DIR,
+    file_path: Path = None,
+    add_city_column: bool = False,
+    city_column_name: str = "city",
+    city: str = None,
 ) -> DataFrame:
-    dataset_path = data_dir.joinpath(f"{resolution}.pkl")
+    dataset_path = data_dir.joinpath(f"{resolution}.pkl") if file_path is None else file_path
     df = pd.read_pickle(dataset_path)
+    if add_city_column:
+        df[city_column_name] = city
     if select_cities is not None:
         df = df[df["city"].isin(select_cities)]
     if drop_cities is not None:
