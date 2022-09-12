@@ -1,6 +1,7 @@
 import gc
 from pathlib import Path
 from typing import Dict, List, Union
+import asyncio
 
 import h3
 import pyproj
@@ -13,6 +14,7 @@ from src.data.load_data import load_city_tag, load_filter
 
 from src.data.make_dataset import h3_to_polygon
 from src.utils.tesselate_amazon_data import group_h3_tags
+from src.utils.tesselate_amazon_data import pull_hex_tags_synch, pull_tags_for_hex
 
 
 class NearestNeighbor:
@@ -30,6 +32,19 @@ class NearestNeighbor:
         self._filter = load_filter(filter_path)
         self._radius = radius
         self._tags = tags
+        self._h3_level = 5
+
+        self._tag_columns = [
+            f"{tag}_{s}" for tag, subset in self._filter.items() for s in subset
+        ]
+
+        # find all hexes
+        self._all_hexes = [
+            dir.stem
+            for dir in self._data_dir.iterdir()
+            if h3.h3_is_valid(dir.stem)
+            and h3.h3_get_resolution(dir.stem) == self._h3_level
+        ]
 
         # set the UTM epsg code
         self._utm_proj = pyproj.Proj("epsg:32619")
@@ -42,6 +57,16 @@ class NearestNeighbor:
         # store the utm polygons of the hexagons that have been visited, to reduce read time
         self._visited_utm_polygons = {}
 
+        # store the tree in cache
+        self._hex_tree = {}
+
+    def _compose_tree(self, hex_id: str, candidates: np.ndarray) -> KDTree:
+        if hex_id in self._hex_tree:
+            return self._hex_tree[hex_id]
+
+        self._hex_tree[hex_id] = KDTree(candidates, leaf_size=40, metric="minkowski")
+        return self._hex_tree[hex_id]
+
     def _compose_table(self, hex_id: str) -> gpd.GeoDataFrame:
         """
         Compose a table of all shapes in the hexagon.
@@ -53,15 +78,20 @@ class NearestNeighbor:
             return None
 
         # just create a single dataframe for all tags
-        df = pd.concat(
-            [
+        dfs = [
                 load_city_tag(
                     file.parent, file.stem, filter_values=self._filter
                 ).to_crs(self._utm_proj.crs)
                 for file in self._data_dir.joinpath(hex_id).iterdir()
                 if (file.suffix == ".pkl") and (file.stem in self._tags)
             ]
-        )
+
+        if len(dfs):
+            df = pd.concat(
+                dfs
+            )
+        else:
+            return None
 
         # df.fillna("", inplace=True)
 
@@ -78,6 +108,46 @@ class NearestNeighbor:
 
         self._visited_hexes[hex_id] = df
         return self._visited_hexes[hex_id]
+
+    def get_traversal_order(
+        self, point_array: gpd.GeoSeries, unique_hexes: gpd.GeoSeries
+    ) -> List[str]:
+        # start at center and then ring around
+        tmp = point_array.to_crs(self._utm_proj.crs).copy(deep=True)
+        center = tmp.y.mean(), tmp.x.mean()
+        center_hex = h3.geo_to_h3(
+            *self._get_utm_coords(*center, inverse=True)[::-1], self._h3_level
+        )
+        t_list = [center_hex]
+        to_visit = [hex for hex in self._all_hexes if hex in unique_hexes]
+        i = 0
+        while len(tmp) and len(to_visit):
+            hex_poly = self._h3_to_utm_polygon(t_list[-1])
+            contained = tmp.within(hex_poly)
+            tmp = tmp[~contained]
+
+            to_visit.pop(to_visit.index(t_list[-1]))
+            found = False
+
+            # try to visit "most central hex" with remaining neighbors.
+            for h in t_list:
+                found = False
+                for n in to_visit:
+                    if h3.h3_indexes_are_neighbors(h, n) and n not in t_list:
+                        break
+                if found:
+                    break
+
+            for n in h3.k_ring(h):
+                if n in to_visit:
+                    t_list.append(n)
+                    found = True
+                    break
+            if not len(to_visit):
+                break
+            if not found:
+                t_list.append(to_visit[-1])
+        return t_list
 
     def _pop_non_neighbors(self, center_hex: str) -> List[int]:
         """
@@ -109,7 +179,7 @@ class NearestNeighbor:
         """
         self._latlon_proj = pyproj.Proj(init=f"epsg:{num}")
 
-    def _get_utm_coords(self, lat: float, lon: float) -> List[float]:
+    def _get_utm_coords(self, lat: float, lon: float, inverse=False) -> List[float]:
         """
         Convert lat/lon coordinates to UTM coordinates.
 
@@ -117,51 +187,25 @@ class NearestNeighbor:
             lat: Latitude
             lon: Longitude
         """
-        return self._utm_proj(
-            lon,
-            lat,
-        )
-
-    # def _get_latlon_coords(self, x: float, y: float) -> List[float]:
-    #     """
-    #     Convert UTM coordinates to lat/lon coordinates.
-
-    #     Args:
-    #         x: UTM x coordinate
-    #         y: UTM y coordinate
-    #     """
-    #     return self._utm_proj(x, y, inverse=True)
+        return self._utm_proj(lon, lat, inverse=inverse)
 
     # #  below comes from https://autogis-site.readthedocs.io/en/latest/notebooks/L3/06_nearest-neighbor-faster.html
-    def get_nearest(
-        self,
-        src_points,
-        candidates,
-        k_neighbors=10,
-    ):
-        # TODO: reinvestigate this function if needed
-        """Find nearest neighbors for all source points from a set of candidate points"""
+    def get_nearest(self, src_points, candidates, hex_id):
 
         # Create tree from the candidate points
-        tree = KDTree(candidates, leaf_size=10, metric="minkowski")
-
-        # Find closest points and distances
-        indices = tree.query_radius(src_points, r=self._radius)
-
-        # Transpose to get distances and indices into arrays
-        # distances = distances.transpose()
-        # indices = indices.transpose()
-
-        # # Get closest indices and distances (i.e. array at index 0)
-        # # note: for the second closest points, you would take index 1, etc.
-        # closest = indices[0]
-        # closest_dist = distances[0]
+        tree = self._compose_tree(hex_id, candidates)
 
         # Return indices and distances
-        return indices
+        return tree.query_radius(src_points, r=self._radius)
 
     def nearest_neighbor(
-        self, left_gdf, right_gdf, left_col=None, right_col=None, return_dist=False
+        self,
+        left_gdf,
+        right_gdf,
+        hex_id,
+        left_col=None,
+        right_col=None,
+        return_dist=False,
     ):
         """
         For each point in left_gdf, find closest point in right GeoDataFrame and return them.
@@ -189,13 +233,14 @@ class NearestNeighbor:
         # -----------------------
         # closest ==> index in right_gdf that corresponds to the closest point
         # dist ==> distance between the nearest neighbors (in radians)
-        closest = self.get_nearest(src_points=left, candidates=right)
+        closest = self.get_nearest(src_points=left, candidates=right, hex_id=hex_id)
 
         # iterate over the closest points and create a new dataframe
         columns = right_gdf.columns
         all_indices = []
         for c in closest:
             all_indices.extend(c)
+
         pivoted = pd.get_dummies(
             right_gdf.loc[all_indices, [tag for tag in self._tags if tag in columns]]
         )
@@ -203,27 +248,12 @@ class NearestNeighbor:
         # sum for each of the groups:
         records = []
         for i, c in enumerate(closest):
-            if len(c):
-                counts = pivoted.loc[c, :].sum(axis=0)
-                records.append({'index': left_gdf.index[i], **counts.to_dict()})
+            # if len(c):
+            counts = pivoted.loc[c, :].sum(axis=0)
+            records.append({"index": left_gdf.index[i], **counts.to_dict()})
 
         # return the records
-        return pd.DataFrame(records).set_index('index')
-
-
-    def _count_nearest_tags(
-        self, hex_id: str, tag: str, indices: List[int]
-    ) -> Dict[str, int]:
-        """
-        Count the nearest tags in a hexagon.
-
-        Args:
-            hex_id: Hexagon ID
-            indices: Indices of nearest neighbors
-        """
-        # get the tags from the hexagon
-        tags = self._visited_hexes[hex_id][tag][tag].iloc[indices].value_counts()
-        return tags.to_dict()
+        return pd.DataFrame(records).set_index("index")
 
     # def _get_nearest_tags(self, hex_id: str, tag: str, indices: List[int]) -> Dict[str, int]:
     def prepare_df_apply(
@@ -237,22 +267,37 @@ class NearestNeighbor:
             tag: Tag to be used
         """
         # get the tags from the hexagon
-        tag_columns = [
-            f"{tag}_{s}" for tag, subset in self._filter.items() for s in subset
-        ]
-        gdf = pd.concat([gdf, pd.DataFrame(columns=tag_columns)], axis=1)
+        gdf = pd.concat([gdf, pd.DataFrame(columns=self._tag_columns)], axis=1)
         # gdf.fillna(0, inplace=True)
         gdf["utm_centroid"] = gdf.geometry.to_crs(self._utm_proj.crs)
         gdf["circle_geom"] = gdf["utm_centroid"].buffer(self._radius)
         gdf.reset_index(drop=True, inplace=True)
 
         # Add the h3 5 level hexagon ID
-        gdf["h3_5"] = gdf.h3.apply(h3.h3_to_parent, res=5)
+        gdf[f"h3_{self._h3_level}"] = gdf.h3.apply(h3.h3_to_parent, res=self._h3_level)
         return gdf
+
+    def _pull_missing_hex(self, hex_id) -> None:
+        # try:
+        #     asyncio.get_event_loop().run_until_complete(
+        #         pull_tags_for_hex(
+        #             row={"h3": hex_id},
+        #             city_dir=self._data_dir,
+        #             tag_list=self._tags,
+        #         )
+        #     )
+        # except RuntimeError as e:
+        pull_hex_tags_synch(
+            row={"h3": hex_id, "geometry": h3_to_polygon(hex_id)},
+            city_dir=self._data_dir,
+            tag_list=self._tags,
+        )
+        
+        self._all_hexes.append(hex_id)
 
     def count_tags(
         self, gdf: gpd.GeoDataFrame, hex_file_resolution: int = 5
-    ) -> gpd.GeoDataFrame:  # sourcery skip: low-code-quality
+    ) -> gpd.GeoDataFrame:
         """
         This is applied on a groupby object, where the objects were grouped by their hexid
 
@@ -263,48 +308,48 @@ class NearestNeighbor:
         Returns:
             gpd.GeoDataFrame: _description_
         """
-        #  create a copy for return
         gdf = gdf.copy()
-        # hex_id = gdf.h3_5.iloc[0]
-        # print(hex_id)
-        hex_id = gdf.h3_5.iloc[0]
+        hex_id = gdf[f"h3_{self._h3_level}"].iloc[0]
         print(hex_id)
-        needed_hex = [
-            hex_id,
-        ]
+        needed_hex = [(hex_id, [True] * len(gdf))]
+        contained = gdf["circle_geom"].within(self._h3_to_utm_polygon(needed_hex[0][0]))
 
-        # check if all the circles are within the parent hexagon
-        contained = gdf["circle_geom"].within(self._h3_to_utm_polygon(needed_hex[0]))
         non_contained = sum(~contained)
         if non_contained > 0:
             neighbors = [
-                (h3_id, self._h3_to_utm_polygon(needed_hex[0]))
+                (h3_id, self._h3_to_utm_polygon(needed_hex[0][0]))
                 for h3_id in h3.k_ring(hex_id, 1)
             ]
+
             for neighbor in neighbors:
-                # you potentially don't need to check all the polygons
-                if gdf["circle_geom"].overlaps(neighbor[1]).any():
-                    needed_hex.append(neighbor[0])
+                check_idx = gdf["circle_geom"].overlaps(neighbor[1])
+                if check_idx.any():
+                    if neighbor[0] not in self._all_hexes:
+                        print(
+                            f"{neighbor[0]} needed but not in files. Pulling from API"
+                        )
+                        self._pull_missing_hex(neighbor[0])
+                    needed_hex.append((neighbor[0], check_idx))
+        ds = []
+        tags = []
+        for hex_id, check_idx in needed_hex:
+            tag_df = self._compose_table(hex_id)
+            if tag_df is not None:
+                tags.extend(list(tag_df.columns))
+                ds.append(
+                    self.nearest_neighbor(
+                        left_gdf=gdf.loc[check_idx],
+                        right_gdf=tag_df,
+                        left_col="utm_centroid",
+                        right_col="utm_centroid",
+                        hex_id=hex_id,
+                    )
+                )
 
-        # for hex_id in needed_hex:
-        tag_df = pd.concat([self._compose_table(hex_id) for hex_id in needed_hex], axis=0)
-            # if tag not in value_counts[circle[0]].keys():
-        #     value_counts[circle[0]] = {}
-        # print("calculating for hex", hex_id)
-        d = self.nearest_neighbor(
-            left_gdf=gdf,
-            right_gdf=tag_df,
-            left_col="utm_centroid",
-            right_col="utm_centroid",
-        )
-
-        # update the gdf with the values in d
+        _tmp = pd.concat(ds, axis=0).fillna(0).reset_index()
+        d = _tmp.groupby(["index"])[_tmp.columns.intersection(self._tag_columns)].sum()
         gdf.update(d)
- 
-        self._pop_non_neighbors(
-            hex_id,
-        )
-
+        self._pop_non_neighbors(hex_id)
         return gdf
 
     def _h3_to_utm_polygon(self, hex: int) -> Polygon:

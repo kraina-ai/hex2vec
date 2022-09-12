@@ -33,7 +33,6 @@ def _iter_cities(data_dir: Path) -> Iterable[Path]:
 @click.argument("data_dir", type=click.Path(exists=True))
 @click.argument("output_dir", type=click.Path(exists=True))
 @click.option("--resolution", type=int, default=9, help="H3 resolution")
-
 def group_city_hexagons(data_dir: str, output_dir: str, resolution: int):
     data_dir = _check_dir_exists(data_dir)
     output_dir = Path(output_dir)

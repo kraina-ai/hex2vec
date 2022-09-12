@@ -17,6 +17,7 @@ from ..data.utils import TOP_LEVEL_OSM_TAGS
 from ..settings import DATA_PROCESSED_DIR, DATA_RAW_DIR
 
 
+
 # little of a hack to get around the fact that osmnx doesn't have async
 def async_wrap(func):
     @wraps(func)
@@ -74,14 +75,39 @@ def cover_point_array_w_hex(
         crs="EPSG:4326",
     )
 
-
-@async_wrap
-def async_ox_geometries(
+def ox_geometries(
     *args,
     **kwargs,
 ) -> gpd.GeoDataFrame:
     return ox.geometries_from_polygon(*args, **kwargs)
 
+async_ox_geometries = async_wrap(ox_geometries)
+
+def pull_hex_tags_synch(
+    row: pd.Series,
+    city_dir: Path,
+    tag_list: str,
+    simplify_data: bool = True,
+    force_pull: bool = False
+) -> pd.Series:
+
+    # make the directory
+    hex_dir = city_dir.joinpath(row["h3"])
+    hex_dir.mkdir(parents=True, exist_ok=True)
+    print("running for hex", row["h3"])
+    for tag in tag_list:
+        if not hex_dir.joinpath(f"{tag}.pkl").exists() or force_pull:
+            gdf = ox_geometries(row['geometry'], tags={tag: True})
+            # clean the data
+            if not gdf.empty:
+                gdf = ensure_geometry_type(gdf)                
+                gdf = gdf.reset_index()[["osmid", tag, "geometry"]] if simplify_data else gdf.reset_index()
+                # save the gdf
+                gdf.to_pickle(
+                    hex_dir.joinpath(f"{tag}.pkl").absolute(),
+                )
+        else:
+            print(f"{tag} already exists")
 
 async def pull_tags_for_hex(
     row: pd.Series,
