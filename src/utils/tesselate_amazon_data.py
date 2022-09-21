@@ -3,13 +3,17 @@ from functools import partial, wraps
 from pathlib import Path
 from random import random
 from typing import Dict, Generator, List, Set
+import warnings
 
+import backoff
+from tqdm import tqdm
 import alphashape
 import geopandas as gpd
 import h3
 import osmnx as ox
 import pandas as pd
 from shapely.geometry import mapping
+from shapely.errors import ShapelyDeprecationWarning
 from ..data.download import ensure_geometry_type
 from ..data.load_data import load_city_tag, load_city_tag_h3
 from ..data.make_dataset import group_city_tags, group_df_by_tag_values, h3_to_polygon, prepare_city_path
@@ -75,6 +79,10 @@ def cover_point_array_w_hex(
         crs="EPSG:4326",
     )
 
+@backoff.on_exception(backoff.expo,
+                      Exception,
+                      max_tries=8,
+                      jitter=None)
 def ox_geometries(
     *args,
     **kwargs,
@@ -94,7 +102,7 @@ def pull_hex_tags_synch(
     # make the directory
     hex_dir = city_dir.joinpath(row["h3"])
     hex_dir.mkdir(parents=True, exist_ok=True)
-    print("running for hex", row["h3"])
+    # print("running for hex", row["h3"])
     for tag in tag_list:
         if not hex_dir.joinpath(f"{tag}.pkl").exists() or force_pull:
             gdf = ox_geometries(row['geometry'], tags={tag: True})
@@ -120,21 +128,29 @@ async def pull_tags_for_hex(
     # make the directory
     hex_dir = city_dir.joinpath(row["h3"])
     hex_dir.mkdir(parents=True, exist_ok=True)
-    print("running for hex", row["h3"])
+    # print("running for hex", row["h3"])
     for tag in tag_list:
-        if not hex_dir.joinpath(f"{tag}.pkl").exists() or force_pull:
+        if not hex_dir.joinpath(f"{tag}.pkl").exists() or force_pull or hex_dir.joinpath(f"{tag}_is_empty.txt").exists():
             await asyncio.sleep(random() * 3)
-            gdf = await async_ox_geometries(row.geometry, tags={tag: True})
-            # clean the data
-            if not gdf.empty:
-                gdf = ensure_geometry_type(gdf)                
-                gdf = gdf.reset_index()[["osmid", tag, "geometry"]] if simplify_data else gdf.reset_index()
-                # save the gdf
-                gdf.to_pickle(
-                    hex_dir.joinpath(f"{tag}.pkl").absolute(),
-                )
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=ShapelyDeprecationWarning)
+                print(f"pulling {city_dir.parent.stem}/{hex_dir.stem}/{tag}")
+                gdf = await async_ox_geometries(row.geometry, tags={tag: True})
+                # clean the data
+                if not gdf.empty:
+                    gdf = ensure_geometry_type(gdf)                
+                    gdf = gdf.reset_index()[["osmid", tag, "geometry"]] if simplify_data else gdf.reset_index()
+                    # save the gdf
+                    gdf.to_pickle(
+                        hex_dir.joinpath(f"{tag}.pkl").absolute()
+                    )
+                    print(f"finished {city_dir.parent.stem}/{hex_dir.stem}/{tag}")
+                else:
+                    # record that the df is empty so we don't try again
+                    with open(hex_dir.joinpath(f"{tag}_is_empty.txt").absolute(), 'w') as f:
+                        pass
         else:
-            print(f"{tag} already exists")
+            print(f"{city_dir.parent.stem}/{hex_dir.stem}/{tag} already exists")
 
 
 async def pull_tags_for_hex_gdf(
@@ -144,23 +160,19 @@ async def pull_tags_for_hex_gdf(
     resolution: int,
     simplify_data: bool = True,
     force_pull: bool = False
-) -> gpd.GeoDataFrame:
+) -> None:
 
     # make the directory
     r_dir = city_dir.joinpath(f"resolution_{resolution}")
     r_dir.mkdir(parents=True, exist_ok=True)
-    return await asyncio.gather(
-        *[pull_tags_for_hex(row[1], r_dir, tag_list, simplify_data, force_pull) for row in hex_gdf.iterrows()]
-    )
-    # return None
-    # # join the data
-    # hex_gdf.apply(
-    #     pull_tags_for_hex,
-    #     axis=1,
-    #     city_dir=r_dir,
-    #     tag_list=tag_list,
-    # )
-
+        # tasks = {pull_tags_for_hex(row[1], r_dir, tag_list, simplify_data, force_pull) for row in hex_gdf.iterrows()}
+        # for task in asyncio.as_completed(tasks):
+        #     _ = await task
+    # for row in hex_gdf.iterrows():
+    #     await pull_tags_for_hex(row[1], r_dir, tag_list, simplify_data, force_pull)
+    #     # sleep to defer to other processes
+    #     await asyncio.sleep(0.01)
+    return [await pull_tags_for_hex(row[1], r_dir, tag_list, simplify_data, force_pull) for row in hex_gdf.iterrows()]
 
 def join_hex_dfs(
     hex_parent_dir: Path,
