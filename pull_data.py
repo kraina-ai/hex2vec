@@ -17,7 +17,7 @@ from src.data.make_dataset import (
 from src.data.load_data import load_filter
 from src.data.utils import TOP_LEVEL_OSM_TAGS
 from src.settings import DATA_DIR, DATA_RAW_DIR, FILTERS_DIR
-from src.utils.tesselate_amazon_data import group_hex_tags, ox_geometries, pull_tags_for_hex_gdf
+from src.utils.tesselate_amazon_data import create_city_from_hex, group_hex_tags, join_hex_dfs, pull_tags_for_hex, pull_tags_for_hex_gdf, walk_n_queue
 
 
 def _check_dir_exists(dir_path: str) -> Path:
@@ -50,48 +50,56 @@ def group_city_hexagons(data_dir: str, output_dir: str, resolution: int):
     )
 
 
-
-
 @click.command()
 @click.argument("data_dir", type=click.Path(exists=True))
-@click.option("--resolution", type=int, default=9, help="H3 resolution")
-@click.option(
-    "--sweep-resolutions",
-    type=str,
-    default="",
-    help="Comma-separated list of resolutions to sweep",
-)
-def create_h3_indices(
-    data_dir: Path, resolution: int, sweep_resolutions: str, *args, **kwargs
-):
-    """
-    Create h3 indices with specified resolution for all cities in the data directory.
-    """
-    try:
-        import os
-        from joblib import Parallel, delayed
-
-        parallel = True
-    except ImportError:
-        print("joblib not installed, skipping parallel processing")
-        parallel = False
-    if sweep_resolutions:
-        resolutions = [int(r) for r in sweep_resolutions.split(",")]
-    else:
-        resolutions = [resolution]
+@click.argument("interim_dir", type=click.Path(exists=True))
+@click.argument("output_dir", type=click.Path(exists=True))
+@click.option("--raw-resolution", type=int)
+@click.option("--resolution", "-r", multiple=True, type=int, )
+def group_all_city_hexagons(data_dir: str, interim_dir: str, output_dir: str, raw_resolution: int, resolution: List[int]):
+    # make sure the data directory exists
     data_dir = _check_dir_exists(data_dir)
-    if parallel:
-        Parallel(n_jobs=os.cpu_count() - 2)(
-            delayed(save_hexes_polygons_for_city)(city, resolution)
-            for city, resolution in itertools.product(
-                _iter_cities(data_dir), resolutions
-            )
+    interim_dir = _check_dir_exists(interim_dir)
+
+    # create the output dir
+    output_dir = Path(output_dir)
+    output_dir.mkdir(exist_ok=True, parents=True)
+
+ 
+    # loop and create dataframe. No mp for RAM issues
+    for city, res in itertools.product(
+            _iter_cities(data_dir), resolution
+        ):
+
+        # for city, res in itertools.product(_iter_cities(data_dir), resolutions):
+        print(f"Processing {city.name} - h3 {res}")
+        interim_path = interim_dir / city.stem / f"resolution_{res}"
+        interim_path.mkdir(parents=True, exist_ok=True)
+        
+        join_hex_dfs(
+            city.joinpath(f"resolution_{raw_resolution}"), 
+            TOP_LEVEL_OSM_TAGS, 
+            res, 
+            interim_path
         )
 
-    else:
-        for city, resolution in itertools.product(_iter_cities(data_dir), resolutions):
-            print(f"Processing {city.name} - h3 {resolution}")
-            save_hexes_polygons_for_city(city, resolution)
+
+        group_hex_tags(
+            hex_parent_dir=interim_path,
+            tag_list=TOP_LEVEL_OSM_TAGS,
+            output_dir=interim_path,
+            resolution=res,
+            filter_values=load_filter(Path() / "filters" / "from_wiki.json"),    
+        )
+
+        city_out_path = output_dir / city.stem 
+        city_out_path.mkdir(exist_ok=True, parents=True)
+
+        create_city_from_hex(
+            hex_parent_dir=interim_path,
+            output_dir=city_out_path,
+            resolution=res
+        )
 
 
 @click.command()
@@ -183,15 +191,34 @@ def group_all_city_tags(data_dir: str, output_dir: str, resolution: int, filter_
 
 
 async def _pull_hex_gdf(latlon_df: pd.DataFrame, data_dir: Path, tag_list: List[str], level: int) -> None:
-    
-    fs = []
+        
+    # create a queue of needed files
+    q = asyncio.Queue()
+    s = asyncio.Semaphore(100)
+    tasks = []
     for c, df in latlon_df.groupby('city'):
         city_dir = data_dir.joinpath(c)
         city_dir.mkdir(parents=True, exist_ok=True)
-        fs.append(pull_tags_for_hex_gdf(city_dir, df, tag_list, level))
-        await asyncio.sleep(0.01)
-    await asyncio.gather(*fs)
+        tasks.append(walk_n_queue(q, city_dir, df, tag_list, level))
+    
+    
+    # consume the queue asyncronously
+    consumers = []
+    for _ in range(100):
+        consumers.append(asyncio.create_task(
+            pull_tags_for_hex(
+                q,
+                s,
 
+            )
+        ))
+    
+    await asyncio.gather(*tasks)
+    await q.join()
+
+    # kill the consumers now that the task has been finished
+    for c in consumers:
+        c.cancel()
 
 
 @click.command()
@@ -205,8 +232,8 @@ def pull_all(output_dir, latlon_csv, city, level) -> None:
     from shapely.geometry import mapping
     
     # settings
-    ox.settings.overpass_rate_limit = False
-    ox.settings.overpass_endpoint = "https://overpass.kumi.systems/api"
+    # ox.settings.overpass_rate_limit = False
+    # ox.settings.overpass_endpoint = "https://overpass.kumi.systems/api"
     ox.settings.timeout = 10_000
 
     # handle paths
@@ -229,6 +256,8 @@ def pull_all(output_dir, latlon_csv, city, level) -> None:
     
     if city:
         # pull cities that may be desired
+
+        dfs = []
         for c in city:
             # find the boundary polygon of the city
             city_df = ox.geometries_from_place(
@@ -237,7 +266,9 @@ def pull_all(output_dir, latlon_csv, city, level) -> None:
             city_boundary = city_df.loc[city_df["name"] == c.split(",")[0], "geometry"].iloc[0]
 
             # cover the polygon with hexes
-            desired_h3s = list(h3.polyfill(mapping(city_boundary), level))
+            city_boundary_geojson = mapping(city_boundary)
+            city_boundary_geojson['coordinates'] = [[c[::-1] for c in coords] for coords in city_boundary_geojson['coordinates']]
+            desired_h3s = list(h3.polyfill(city_boundary_geojson, level))
 
             # create a dataframe representing the hexagons
             city_df = pd.DataFrame({
@@ -245,11 +276,16 @@ def pull_all(output_dir, latlon_csv, city, level) -> None:
                 'geometry': list(map(h3_to_polygon, desired_h3s))
             })
 
-            # make a folder for the city
-            city_path = output_path.joinpath(c)
-            city_path.mkdir(exist_ok=True)
-            asyncio.run(pull_tags_for_hex_gdf(city_path, city_df, TOP_LEVEL_OSM_TAGS, level))
+            city_df['city'] = c
 
+            dfs.append(
+                city_df.copy()
+            )
+
+        asyncio.run(
+            _pull_hex_gdf(latlon_df=pd.concat(dfs, axis=0), data_dir=output_path, tag_list=TOP_LEVEL_OSM_TAGS, level=level)
+        )
+        
     return output_path
 
 
@@ -266,9 +302,9 @@ def main():
 main.add_command(pull_all)
 main.add_command(add_h3_indices)
 main.add_command(simplify_data)
-main.add_command(create_h3_indices)
+# main.add_command(create_h3_indices)
 main.add_command(group_all_city_tags)
-main.add_command(group_city_hexagons)
+main.add_command(group_all_city_hexagons)
 if __name__ == "__main__":
     try:
         main()

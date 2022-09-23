@@ -13,10 +13,11 @@ import h3
 import osmnx as ox
 import pandas as pd
 from shapely.geometry import mapping
-from shapely.errors import ShapelyDeprecationWarning
+
+
 from ..data.download import ensure_geometry_type
 from ..data.load_data import load_city_tag, load_city_tag_h3
-from ..data.make_dataset import group_city_tags, group_df_by_tag_values, h3_to_polygon, prepare_city_path
+from ..data.make_dataset import group_df_by_tag_values, h3_to_polygon, prepare_city_path
 from ..data.utils import TOP_LEVEL_OSM_TAGS
 from ..settings import DATA_PROCESSED_DIR, DATA_RAW_DIR
 
@@ -82,7 +83,7 @@ def cover_point_array_w_hex(
 @backoff.on_exception(backoff.expo,
                       Exception,
                       max_tries=8,
-                      jitter=None)
+                      max_time=300)
 def ox_geometries(
     *args,
     **kwargs,
@@ -117,40 +118,69 @@ def pull_hex_tags_synch(
         else:
             print(f"{tag} already exists")
 
-async def pull_tags_for_hex(
-    row: pd.Series,
+
+
+async def walk_n_queue(
+    queue: asyncio.Queue,
     city_dir: Path,
+    hex_gdf: gpd.GeoDataFrame,
     tag_list: str,
+    resolution: int,
     simplify_data: bool = True,
     force_pull: bool = False
-) -> pd.Series:
+) -> None:
 
-    # make the directory
-    hex_dir = city_dir.joinpath(row["h3"])
-    hex_dir.mkdir(parents=True, exist_ok=True)
-    # print("running for hex", row["h3"])
-    for tag in tag_list:
-        if not hex_dir.joinpath(f"{tag}.pkl").exists() or force_pull or hex_dir.joinpath(f"{tag}_is_empty.txt").exists():
-            await asyncio.sleep(random() * 3)
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", category=ShapelyDeprecationWarning)
-                print(f"pulling {city_dir.parent.stem}/{hex_dir.stem}/{tag}")
-                gdf = await async_ox_geometries(row.geometry, tags={tag: True})
-                # clean the data
-                if not gdf.empty:
-                    gdf = ensure_geometry_type(gdf)                
-                    gdf = gdf.reset_index()[["osmid", tag, "geometry"]] if simplify_data else gdf.reset_index()
-                    # save the gdf
-                    gdf.to_pickle(
-                        hex_dir.joinpath(f"{tag}.pkl").absolute()
-                    )
-                    print(f"finished {city_dir.parent.stem}/{hex_dir.stem}/{tag}")
-                else:
-                    # record that the df is empty so we don't try again
-                    with open(hex_dir.joinpath(f"{tag}_is_empty.txt").absolute(), 'w') as f:
-                        pass
-        else:
-            print(f"{city_dir.parent.stem}/{hex_dir.stem}/{tag} already exists")
+    r_dir = city_dir.joinpath(f"resolution_{resolution}")
+    r_dir.mkdir(parents=True, exist_ok=True)
+    for _, row in hex_gdf.iterrows():
+        hex_dir = r_dir.joinpath(row["h3"])
+        hex_dir.mkdir(parents=True, exist_ok=True)
+        for tag in tag_list:
+            if not (hex_dir.joinpath(f"{tag}.pkl").exists() 
+                    or hex_dir.joinpath(f"{tag}_is_empty.txt").exists()) \
+                    or force_pull:
+                await queue.put(
+                    (hex_dir.joinpath(f"{tag}.pkl"), row.geometry, tag)
+                )
+                await asyncio.sleep(0)
+
+
+# async def pull_tags_for_hex(
+#     row: pd.Series,
+#     city_dir: Path,
+#     tag_list: str,
+#     simplify_data: bool = True,
+#     force_pull: bool = False
+# ) -> pd.Series:
+
+async def pull_tags_for_hex(
+    queue: asyncio.Queue,
+    semaphore: asyncio.Semaphore
+):
+    simplify_data = True
+    async with semaphore:
+        while True:
+            # this is probs bad practice
+            save_path, geom, tag = await queue.get()
+            print(f"pulling {save_path.parent.parent.parent.stem}/{save_path.parent.stem}/{tag}")
+            gdf = await async_ox_geometries(geom, tags={tag: True})
+            # clean the data
+            if not gdf.empty:
+                gdf = ensure_geometry_type(gdf)
+                gdf = gdf.reset_index()[["osmid", tag, "geometry"]] if simplify_data else gdf.reset_index()
+                # save the gdf
+                gdf.to_pickle(
+                    save_path.absolute()
+                )
+                print(f"finished {save_path.parent.parent.parent.stem}/{save_path.parent.stem}/{tag}")
+            else:
+                # record that the df is empty so we don't try again
+                with open(save_path.parent.joinpath(f"{tag}_is_empty.txt").absolute(), 'w') as f:
+                    pass
+                # tell everyon the that the task is done
+                queue.task_done()
+        # else:
+        #     print(f"{city_dir.parent.stem}/{hex_dir.stem}/{tag} already exists")
 
 
 async def pull_tags_for_hex_gdf(
@@ -165,15 +195,11 @@ async def pull_tags_for_hex_gdf(
     # make the directory
     r_dir = city_dir.joinpath(f"resolution_{resolution}")
     r_dir.mkdir(parents=True, exist_ok=True)
-        # tasks = {pull_tags_for_hex(row[1], r_dir, tag_list, simplify_data, force_pull) for row in hex_gdf.iterrows()}
-        # for task in asyncio.as_completed(tasks):
-        #     _ = await task
-    # for row in hex_gdf.iterrows():
-    #     await pull_tags_for_hex(row[1], r_dir, tag_list, simplify_data, force_pull)
-    #     # sleep to defer to other processes
-    #     await asyncio.sleep(0.01)
-    return [await pull_tags_for_hex(row[1], r_dir, tag_list, simplify_data, force_pull) for row in hex_gdf.iterrows()]
-
+    for row in hex_gdf.iterrows():
+        await pull_tags_for_hex(row[1], r_dir, tag_list, simplify_data, force_pull)
+        # sleep to defer to other processes
+        await asyncio.sleep(0.01)
+    
 def join_hex_dfs(
     hex_parent_dir: Path,
     tag_list: List[str],

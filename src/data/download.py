@@ -6,14 +6,18 @@ from pathlib import Path
 from tqdm import tqdm
 from shapely.geometry import Polygon
 from .utils import TOP_LEVEL_OSM_TAGS
+from shapely.errors import ShapelyDeprecationWarning
+import warnings
 
 def ensure_geometry_type(df: GeoDataFrame, geometry_column: str = "geometry") -> GeoDataFrame:
-    def ensure_geometry_type_correct(geometry):
-        return wkt.loads(geometry) if type(geometry) == str else geometry
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=ShapelyDeprecationWarning)
+        def ensure_geometry_type_correct(geometry):
+            return wkt.loads(geometry) if type(geometry) == str else geometry
 
-    if geometry_column in df.columns:
-        df[geometry_column] = df[geometry_column].apply(ensure_geometry_type_correct)
-    return df
+        if geometry_column in df.columns:
+            df[geometry_column] = df[geometry_column].apply(ensure_geometry_type_correct)
+        return df
 
 
 def download_whole_city(city_name: Union[str, List[str]], save_path: Path, timeout: int = 10000):
