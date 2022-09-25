@@ -247,8 +247,35 @@ def pull_all(output_dir, latlon_csv, city, level) -> None:
         
         # drop individual lat/lons, just keep unique h3s, cities, and geometries
         latlon = latlon.groupby('h3').first().reset_index()
+        
+        # buffer by one neighbor. 
+        dfs = []
+        for city, group_df in latlon.groupby('city'):
+            h3s = set(group_df['h3'].values)
+            new_rows = []
+            reported_hex = set()
+            for hex in h3s:
+                # find the missing
+                if missing := h3.k_ring(hex, 1) - h3s:
+                    for _h in missing:
+                        if _h not in reported_hex:
+                            new_rows.append({'city': city, 'h3': _h, 'lat': None, 'lng': None, } )
+                            reported_hex.add(
+                                _h
+                            )
+            dfs.append(
+                pd.concat(
+                    [group_df, pd.DataFrame.from_records(new_rows)],
+                    axis=0
+                ).reset_index()
+            )
+
+        latlon = pd.concat(dfs).reset_index()
+            
+        # add in an additional buffer of h3s
         latlon['geometry'] = list(map(h3_to_polygon, latlon['h3']))
         
+
         # pull all of the required hexagons asynchronously
         asyncio.run(
             _pull_hex_gdf(latlon_df=latlon, data_dir=output_path, tag_list=TOP_LEVEL_OSM_TAGS, level=level)
