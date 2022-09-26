@@ -177,11 +177,9 @@ async def pull_tags_for_hex(
                 # record that the df is empty so we don't try again
                 with open(save_path.parent.joinpath(f"{tag}_is_empty.txt").absolute(), 'w') as f:
                     pass
-                # tell everyon the that the task is done
-                queue.task_done()
-        # else:
-        #     print(f"{city_dir.parent.stem}/{hex_dir.stem}/{tag} already exists")
-
+            # tell everyon the that the task is done
+            queue.task_done()
+        
 
 async def pull_tags_for_hex_gdf(
     city_dir: Path,
@@ -208,7 +206,7 @@ def join_hex_dfs(
 ) -> gpd.GeoDataFrame:
 
     # create a map of smaller hexes to larger hexes
-    for hex_id in iterate_hex_dir(hex_parent_dir):
+    for hex_id in tqdm(list(iterate_hex_dir(hex_parent_dir))):
         # create a hexagon gpd
         target_hex_ids = list(h3.h3_to_children(hex_id.stem, target_resolution))
         all_hex_polygons = list(map(h3_to_polygon, target_hex_ids))
@@ -217,14 +215,48 @@ def join_hex_dfs(
             crs="EPSG:4326",
         )
 
-        #  load the tag data
+        # create a list of other parent-level hexagons needed. 
+        # This is because the children are not always geographically contained. 
+        needed_hexes = [hex_id]
+        needed_hexes.extend([hex_parent_dir / h for h in h3.k_ring(hex_id.stem, 1)])
+        
+        # create a list of the buffered boundary hexagons. It's not necessary to have the neighbors of these hexagons.
+        boundary = False
+        if (hex_parent_dir.parent / "boundary.hex.txt").exists():
+            with open((hex_parent_dir.parent / "boundary.hex.txt"), 'r') as f:
+                boundary = hex_id.stem in f.read().split("\n")
+
+        # check that all hexagons exist (they won't, because at some point we are at the edge of a hexagon)
+        drops = []
+        for i, p_hex in enumerate(needed_hexes):
+            if not p_hex.exists() and not boundary:
+                print(f"{p_hex.stem} is needed to completely cover {hex_id.stem} children but missing")
+                drops.append(i)
+        
+        # drop the missing parent hexagons
+        for i in drops[::-1]:
+            needed_hexes.pop(i)
+        
+        # load the tag data. 
         for tag in tag_list:
-            tag_gdf = load_city_tag(hex_id, tag=tag, data_dir=hex_id)
-            if tag_gdf is not None:
-                # spatial join of the hexes with the tag data
+            tag_dfs = []
+            for p_hex in needed_hexes:
+                tag_gdf = load_city_tag(p_hex, tag=tag, data_dir=hex_id)
+                if tag_gdf is not None:
+                    tag_dfs.append(tag_gdf)
+            if len(tag_dfs):
+
+                # create a hex + neighbors super df
+                tag_gdf = pd.concat(tag_dfs, axis=0)
+                # drop duplicated osmids
+                tag_gdf = tag_gdf.drop_duplicates(subset=['osmid'])
+
+                # spatial join of the hexes with the tag data. Only save data that is in the target hexagons.
                 tag_gdf = gpd.sjoin(
                     tag_gdf, hexes_gdf, how="inner", predicate="intersects"
                 )[["h3", "osmid", tag, "geometry"]]
+                
+                # create a save location for the data 
                 save_location = output_dir.joinpath(
                     hex_id.stem,
                 )
@@ -233,12 +265,6 @@ def join_hex_dfs(
                     save_location.joinpath(f"{tag}_{target_resolution}.pkl").absolute(),
                     protocol=4,
                 )
-            else:
-                print(f"tag {tag} is empty for {hex_id.stem}")
-
-        # hex_id_parent_dir = hex_parent_dir.joinpath(hex_id_parent)
-        # hex_id_parent_dir.mkdir(parents=True, exist_ok=True)
-        # hex_id_parent_dir.joinpath(hex_id).touch()
 
 
 def group_h3_tags(
@@ -314,4 +340,19 @@ def create_city_from_hex(
         df = df[(df.T != 0).any()]
     df.to_pickle(output_dir.joinpath(f"{resolution}.pkl").absolute(), protocol=4)
     return df
+
+
+def get_buffer_hexes(hexes: Set[str], save_boundary: bool = True, save_path: Path = None) -> Set[str]:
+    reported_hex = set()
+    for hex in hexes:
+        # find the missing and add them
+        if missing := h3.k_ring(hex, 1) - hexes:
+            for _h in missing:
+                reported_hex.add(
+                    _h
+                )
+    
+    if save_boundary:
+        with open(save_path / "boundary.hex.txt", 'w') as f:
+            f.write("\n".join(reported_hex)) 
 

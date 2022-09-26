@@ -17,7 +17,7 @@ from src.data.make_dataset import (
 from src.data.load_data import load_filter
 from src.data.utils import TOP_LEVEL_OSM_TAGS
 from src.settings import DATA_DIR, DATA_RAW_DIR, FILTERS_DIR
-from src.utils.tesselate_amazon_data import create_city_from_hex, group_hex_tags, join_hex_dfs, pull_tags_for_hex, pull_tags_for_hex_gdf, walk_n_queue
+from src.utils.tesselate_amazon_data import create_city_from_hex, get_buffer_hexes, group_hex_tags, join_hex_dfs, pull_tags_for_hex, pull_tags_for_hex_gdf, walk_n_queue
 
 
 def _check_dir_exists(dir_path: str) -> Path:
@@ -82,7 +82,6 @@ def group_all_city_hexagons(data_dir: str, interim_dir: str, output_dir: str, ra
             res, 
             interim_path
         )
-
 
         group_hex_tags(
             hex_parent_dir=interim_path,
@@ -209,7 +208,6 @@ async def _pull_hex_gdf(latlon_df: pd.DataFrame, data_dir: Path, tag_list: List[
             pull_tags_for_hex(
                 q,
                 s,
-
             )
         ))
     
@@ -232,8 +230,8 @@ def pull_all(output_dir, latlon_csv, city, level) -> None:
     from shapely.geometry import mapping
     
     # settings
-    # ox.settings.overpass_rate_limit = False
-    # ox.settings.overpass_endpoint = "https://overpass.kumi.systems/api"
+    ox.settings.overpass_rate_limit = False
+    ox.settings.overpass_endpoint = "https://overpass.kumi.systems/api"
     ox.settings.timeout = 10_000
 
     # handle paths
@@ -248,24 +246,20 @@ def pull_all(output_dir, latlon_csv, city, level) -> None:
         # drop individual lat/lons, just keep unique h3s, cities, and geometries
         latlon = latlon.groupby('h3').first().reset_index()
         
-        # buffer by one neighbor. 
+        # buffer by one neighbor, everywhere (this includes gaps, holes, etx) 
         dfs = []
         for city, group_df in latlon.groupby('city'):
+            
+            # get the required hexagons
             h3s = set(group_df['h3'].values)
-            new_rows = []
-            reported_hex = set()
-            for hex in h3s:
-                # find the missing
-                if missing := h3.k_ring(hex, 1) - h3s:
-                    for _h in missing:
-                        if _h not in reported_hex:
-                            new_rows.append({'city': city, 'h3': _h, 'lat': None, 'lng': None, } )
-                            reported_hex.add(
-                                _h
-                            )
+            
+            # buffer by 1 hexagon & save the "boundary" hexagons to a list in the city directory
+            city_dir = output_path.joinpath(city)
+            city_dir.mkdir(parents=True, exist_ok=True)            
+            additional_h3s = get_buffer_hexes(h3s, save_boundary=True, save_path=city_dir)
             dfs.append(
                 pd.concat(
-                    [group_df, pd.DataFrame.from_records(new_rows)],
+                    [group_df, pd.DataFrame.from_records([{'city': city, 'h3': _h, 'lat': None, 'lng': None, } for _h in additional_h3s])],
                     axis=0
                 ).reset_index()
             )
@@ -295,16 +289,21 @@ def pull_all(output_dir, latlon_csv, city, level) -> None:
             # cover the polygon with hexes
             city_boundary_geojson = mapping(city_boundary)
             city_boundary_geojson['coordinates'] = [[c[::-1] for c in coords] for coords in city_boundary_geojson['coordinates']]
-            desired_h3s = list(h3.polyfill(city_boundary_geojson, level))
+            desired_h3s = set(h3.polyfill(city_boundary_geojson, level))
+
+            # buffer by 1 hexagon & save the "boundary" hexagons to a list in the city directory
+            city_dir = output_path.joinpath(city)
+            city_dir.mkdir(parents=True, exist_ok=True)            
+            desired_h3s = list(desired_h3s.union(
+                get_buffer_hexes(desired_h3s, save_boundary=True, save_path=city_dir)
+            ))
 
             # create a dataframe representing the hexagons
             city_df = pd.DataFrame({
                 'h3': desired_h3s,
                 'geometry': list(map(h3_to_polygon, desired_h3s))
             })
-
             city_df['city'] = c
-
             dfs.append(
                 city_df.copy()
             )
