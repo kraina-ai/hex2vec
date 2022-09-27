@@ -72,33 +72,36 @@ def group_all_city_hexagons(data_dir: str, interim_dir: str, output_dir: str, ra
         ):
 
         # for city, res in itertools.product(_iter_cities(data_dir), resolutions):
-        print(f"Processing {city.name} - h3 {res}")
-        interim_path = interim_dir / city.stem / f"resolution_{res}"
-        interim_path.mkdir(parents=True, exist_ok=True)
+        if "Austin" not in city.name:
         
-        join_hex_dfs(
-            city.joinpath(f"resolution_{raw_resolution}"), 
-            TOP_LEVEL_OSM_TAGS, 
-            res, 
-            interim_path
-        )
+            print(f"Processing {city.name} - h3 {res}")
+            interim_path = interim_dir / city.stem / f"resolution_{res}"
+            interim_path.mkdir(parents=True, exist_ok=True)
+            
+            join_hex_dfs(
+                city.joinpath(f"resolution_{raw_resolution}"), 
+                TOP_LEVEL_OSM_TAGS, 
+                res, 
+                interim_path
+            )
 
-        group_hex_tags(
-            hex_parent_dir=interim_path,
-            tag_list=TOP_LEVEL_OSM_TAGS,
-            output_dir=interim_path,
-            resolution=res,
-            filter_values=load_filter(Path() / "filters" / "from_wiki.json"),    
-        )
+            print(f"Grouping {city.name} - h3 {res}")
+            group_hex_tags(
+                hex_parent_dir=interim_path,
+                tag_list=TOP_LEVEL_OSM_TAGS,
+                output_dir=interim_path,
+                resolution=res,
+                filter_values=load_filter(Path() / "filters" / "from_wiki.json"),    
+            )
 
-        city_out_path = output_dir / city.stem 
-        city_out_path.mkdir(exist_ok=True, parents=True)
-
-        create_city_from_hex(
-            hex_parent_dir=interim_path,
-            output_dir=city_out_path,
-            resolution=res
-        )
+            print(f"Creating City DF {city.name} - h3 {res}")
+            city_out_path = output_dir / city.stem 
+            city_out_path.mkdir(exist_ok=True, parents=True)
+            create_city_from_hex(
+                hex_parent_dir=interim_path,
+                output_dir=city_out_path,
+                resolution=res
+            )
 
 
 @click.command()

@@ -280,6 +280,7 @@ def group_h3_tags(
     dfs = []
     unique_h3 = list(h3.h3_to_children(hex_id, resolution))
     for tag in tags:
+        # create df
         df = load_city_tag_h3(hex_id, tag, resolution, filter_values, data_path=data_dir)
         if df is not None and not df.empty:
             tag_grouped = group_df_by_tag_values(df, tag)
@@ -307,7 +308,7 @@ def group_hex_tags(
     filter_values: Dict[str, str] = None,
 ) -> None:
 
-    for hex_id in iterate_hex_dir(hex_parent_dir):
+    for hex_id in tqdm(list(iterate_hex_dir(hex_parent_dir))):
         h3_grouped_df = group_h3_tags(
             hex_id=hex_id.stem,
             resolution=resolution,
