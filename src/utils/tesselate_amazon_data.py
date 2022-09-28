@@ -365,7 +365,7 @@ def get_buffer_hexes(hexes: Set[str], save_boundary: bool = True, save_path: Pat
     
     return reported_hex
 
-def fetch_city_polygon(city_name: str) -> Dict:
+def fetch_city_polygon(city_name: str, return_gdf=False) -> Dict:
     from osmnx.geocoder import _geocode_query_to_gdf
 
     try:
@@ -375,6 +375,8 @@ def fetch_city_polygon(city_name: str) -> Dict:
             by_osmid=False,
             which_result=None
         )
+        if return_gdf:
+            return city_gdf
         # find the boundary polygon. Turn into geojson
         city_boundary_geojson = mapping(city_gdf.geometry.iloc[0])
         # reverse the coordinates for the h3 api
