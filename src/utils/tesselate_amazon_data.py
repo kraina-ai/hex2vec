@@ -2,17 +2,22 @@ import asyncio
 from functools import partial, wraps
 from pathlib import Path
 from random import random
-from typing import Dict, Generator, List, Set
+from typing import Any, Dict, Generator, List, Set
+import warnings
 
+import backoff
+from tqdm import tqdm
 import alphashape
 import geopandas as gpd
 import h3
 import osmnx as ox
 import pandas as pd
 from shapely.geometry import mapping
+
+
 from ..data.download import ensure_geometry_type
 from ..data.load_data import load_city_tag, load_city_tag_h3
-from ..data.make_dataset import group_city_tags, group_df_by_tag_values, h3_to_polygon, prepare_city_path
+from ..data.make_dataset import group_df_by_tag_values, h3_to_polygon, prepare_city_path
 from ..data.utils import TOP_LEVEL_OSM_TAGS
 from ..settings import DATA_PROCESSED_DIR, DATA_RAW_DIR
 
@@ -75,6 +80,10 @@ def cover_point_array_w_hex(
         crs="EPSG:4326",
     )
 
+@backoff.on_exception(backoff.expo,
+                      Exception,
+                      max_tries=8,
+                      max_time=300)
 def ox_geometries(
     *args,
     **kwargs,
@@ -94,7 +103,7 @@ def pull_hex_tags_synch(
     # make the directory
     hex_dir = city_dir.joinpath(row["h3"])
     hex_dir.mkdir(parents=True, exist_ok=True)
-    print("running for hex", row["h3"])
+    # print("running for hex", row["h3"])
     for tag in tag_list:
         if not hex_dir.joinpath(f"{tag}.pkl").exists() or force_pull:
             gdf = ox_geometries(row['geometry'], tags={tag: True})
@@ -109,33 +118,68 @@ def pull_hex_tags_synch(
         else:
             print(f"{tag} already exists")
 
-async def pull_tags_for_hex(
-    row: pd.Series,
+
+
+async def walk_n_queue(
+    queue: asyncio.Queue,
     city_dir: Path,
+    hex_gdf: gpd.GeoDataFrame,
     tag_list: str,
+    resolution: int,
     simplify_data: bool = True,
     force_pull: bool = False
-) -> pd.Series:
+) -> None:
 
-    # make the directory
-    hex_dir = city_dir.joinpath(row["h3"])
-    hex_dir.mkdir(parents=True, exist_ok=True)
-    print("running for hex", row["h3"])
-    for tag in tag_list:
-        if not hex_dir.joinpath(f"{tag}.pkl").exists() or force_pull:
-            await asyncio.sleep(random() * 3)
-            gdf = await async_ox_geometries(row['geometry'], tags={tag: True})
+    r_dir = city_dir.joinpath(f"resolution_{resolution}")
+    r_dir.mkdir(parents=True, exist_ok=True)
+    for _, row in hex_gdf.iterrows():
+        hex_dir = r_dir.joinpath(row["h3"])
+        hex_dir.mkdir(parents=True, exist_ok=True)
+        for tag in tag_list:
+            if not (hex_dir.joinpath(f"{tag}.pkl").exists() 
+                    or hex_dir.joinpath(f"{tag}_is_empty.txt").exists()) \
+                    or force_pull:
+                await queue.put(
+                    (hex_dir.joinpath(f"{tag}.pkl"), row.geometry, tag)
+                )
+                await asyncio.sleep(0)
+
+
+# async def pull_tags_for_hex(
+#     row: pd.Series,
+#     city_dir: Path,
+#     tag_list: str,
+#     simplify_data: bool = True,
+#     force_pull: bool = False
+# ) -> pd.Series:
+
+async def pull_tags_for_hex(
+    queue: asyncio.Queue,
+    semaphore: asyncio.Semaphore
+):
+    simplify_data = True
+    async with semaphore:
+        while True:
+            # this is probs bad practice
+            save_path, geom, tag = await queue.get()
+            print(f"pulling {save_path.parent.parent.parent.stem}/{save_path.parent.stem}/{tag}")
+            gdf = await async_ox_geometries(geom, tags={tag: True})
             # clean the data
             if not gdf.empty:
-                gdf = ensure_geometry_type(gdf)                
+                gdf = ensure_geometry_type(gdf)
                 gdf = gdf.reset_index()[["osmid", tag, "geometry"]] if simplify_data else gdf.reset_index()
                 # save the gdf
                 gdf.to_pickle(
-                    hex_dir.joinpath(f"{tag}.pkl").absolute(),
+                    save_path.absolute()
                 )
-        else:
-            print(f"{tag} already exists")
-
+                print(f"finished {save_path.parent.parent.parent.stem}/{save_path.parent.stem}/{tag}")
+            else:
+                # record that the df is empty so we don't try again
+                with open(save_path.parent.joinpath(f"{tag}_is_empty.txt").absolute(), 'w') as f:
+                    pass
+            # tell everyon the that the task is done
+            queue.task_done()
+        
 
 async def pull_tags_for_hex_gdf(
     city_dir: Path,
@@ -144,24 +188,16 @@ async def pull_tags_for_hex_gdf(
     resolution: int,
     simplify_data: bool = True,
     force_pull: bool = False
-) -> gpd.GeoDataFrame:
+) -> None:
 
     # make the directory
     r_dir = city_dir.joinpath(f"resolution_{resolution}")
     r_dir.mkdir(parents=True, exist_ok=True)
-    return await asyncio.gather(
-        *[pull_tags_for_hex(row[1], r_dir, tag_list, simplify_data, force_pull) for row in hex_gdf.iterrows()]
-    )
-    # return None
-    # # join the data
-    # hex_gdf.apply(
-    #     pull_tags_for_hex,
-    #     axis=1,
-    #     city_dir=r_dir,
-    #     tag_list=tag_list,
-    # )
-
-
+    for row in hex_gdf.iterrows():
+        await pull_tags_for_hex(row[1], r_dir, tag_list, simplify_data, force_pull)
+        # sleep to defer to other processes
+        await asyncio.sleep(0.01)
+    
 def join_hex_dfs(
     hex_parent_dir: Path,
     tag_list: List[str],
@@ -170,7 +206,7 @@ def join_hex_dfs(
 ) -> gpd.GeoDataFrame:
 
     # create a map of smaller hexes to larger hexes
-    for hex_id in iterate_hex_dir(hex_parent_dir):
+    for hex_id in tqdm(list(iterate_hex_dir(hex_parent_dir))):
         # create a hexagon gpd
         target_hex_ids = list(h3.h3_to_children(hex_id.stem, target_resolution))
         all_hex_polygons = list(map(h3_to_polygon, target_hex_ids))
@@ -179,14 +215,47 @@ def join_hex_dfs(
             crs="EPSG:4326",
         )
 
-        #  load the tag data
+        # create a list of other parent-level hexagons needed. 
+        # This is because the children are not always geographically contained.
+        needed_hexes = [hex_id, *[hex_parent_dir / h for h in h3.k_ring(hex_id.stem, 1)]]
+
+        # create a list of the buffered boundary hexagons. It's not necessary to have the neighbors of these hexagons.
+        boundary = False
+        if (hex_parent_dir.parent / "boundary.hex.txt").exists():
+            with open((hex_parent_dir.parent / "boundary.hex.txt"), 'r') as f:
+                boundary = hex_id.stem in f.read().split("\n")
+
+        # check that all hexagons exist (they won't, because at some point we are at the edge of a hexagon)
+        drops = []
+        for i, p_hex in enumerate(needed_hexes):
+            if not p_hex.exists() and not boundary:
+                print(f"{p_hex.stem} is needed to completely cover {hex_id.stem} children but missing")
+                drops.append(i)
+
+        # drop the missing parent hexagons
+        for i in drops[::-1]:
+            needed_hexes.pop(i)
+
+        # load the tag data. 
         for tag in tag_list:
-            tag_gdf = load_city_tag(hex_id, tag=tag, data_dir=hex_id)
-            if tag_gdf is not None:
-                # spatial join of the hexes with the tag data
+            tag_dfs = []
+            for p_hex in needed_hexes:
+                tag_gdf = load_city_tag(p_hex, tag=tag, data_dir=hex_id)
+                if tag_gdf is not None:
+                    tag_dfs.append(tag_gdf)
+            if len(tag_dfs):
+
+                # create a hex + neighbors super df
+                tag_gdf = pd.concat(tag_dfs, axis=0)
+                # drop duplicated osmids
+                tag_gdf = tag_gdf.drop_duplicates(subset=['osmid'])
+
+                # spatial join of the hexes with the tag data. Only save data that is in the target hexagons.
                 tag_gdf = gpd.sjoin(
                     tag_gdf, hexes_gdf, how="inner", predicate="intersects"
                 )[["h3", "osmid", tag, "geometry"]]
+
+                # create a save location for the data 
                 save_location = output_dir.joinpath(
                     hex_id.stem,
                 )
@@ -195,12 +264,6 @@ def join_hex_dfs(
                     save_location.joinpath(f"{tag}_{target_resolution}.pkl").absolute(),
                     protocol=4,
                 )
-            else:
-                print(f"tag {tag} is empty for {hex_id.stem}")
-
-        # hex_id_parent_dir = hex_parent_dir.joinpath(hex_id_parent)
-        # hex_id_parent_dir.mkdir(parents=True, exist_ok=True)
-        # hex_id_parent_dir.joinpath(hex_id).touch()
 
 
 def group_h3_tags(
@@ -216,6 +279,7 @@ def group_h3_tags(
     dfs = []
     unique_h3 = list(h3.h3_to_children(hex_id, resolution))
     for tag in tags:
+        # create df
         df = load_city_tag_h3(hex_id, tag, resolution, filter_values, data_path=data_dir)
         if df is not None and not df.empty:
             tag_grouped = group_df_by_tag_values(df, tag)
@@ -243,7 +307,7 @@ def group_hex_tags(
     filter_values: Dict[str, str] = None,
 ) -> None:
 
-    for hex_id in iterate_hex_dir(hex_parent_dir):
+    for hex_id in tqdm(list(iterate_hex_dir(hex_parent_dir))):
         h3_grouped_df = group_h3_tags(
             hex_id=hex_id.stem,
             resolution=resolution,
@@ -276,4 +340,51 @@ def create_city_from_hex(
         df = df[(df.T != 0).any()]
     df.to_pickle(output_dir.joinpath(f"{resolution}.pkl").absolute(), protocol=4)
     return df
+
+
+def get_buffer_hexes(hexes: Set[str], save_boundary: bool = True, save_path: Path = None) -> Set[str]:
+    reported_hex = set()
+    for hex in hexes:
+        # find the missing and add them
+        if missing := h3.k_ring(hex, 1) - hexes:
+            for _h in missing:
+                reported_hex.add(
+                    _h
+                )
+
+    if save_boundary:
+        if (save_path / "boundary.hex.txt").exists():
+            with open(save_path / "boundary.hex.txt", 'r') as f:
+                already_marked = {h for h in f.read().split("\n") if len(h)}
+        else:
+            already_marked = set()
+
+        with open(save_path / "boundary.hex.txt", 'w') as f:                        
+            f.write("\n".join(reported_hex.union(already_marked)))
+
+    return reported_hex
+
+def fetch_city_polygon(city_name: str) -> Dict:
+    # sourcery skip: raise-specific-error
+    from osmnx.geocoder import _geocode_query_to_gdf
+
+    try:
+        # bypass osmnx extras
+        city_gdf = _geocode_query_to_gdf(
+            city_name,
+            by_osmid=False,
+            which_result=None
+        )
+        # find the boundary polygon. Turn into geojson
+        city_boundary_geojson = mapping(city_gdf.geometry.iloc[0])
+        # reverse the coordinates for the h3 api
+        city_boundary_geojson['coordinates'] = [[c[::-1] for c in coords] for coords in city_boundary_geojson['coordinates']]
+        # return the json
+        return city_boundary_geojson
+
+    except (IndexError, KeyError) as e:
+
+        raise Exception(f"OSMNX did not find a boundary geometry for {city_name}") from e
+
+
 
