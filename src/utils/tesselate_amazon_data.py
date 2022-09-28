@@ -124,7 +124,7 @@ async def pull_tags_for_hex(
     for tag in tag_list:
         if not hex_dir.joinpath(f"{tag}.pkl").exists() or force_pull:
             await asyncio.sleep(random() * 3)
-            gdf = await async_ox_geometries(row.geometry, tags={tag: True})
+            gdf = await async_ox_geometries(row['geometry'], tags={tag: True})
             # clean the data
             if not gdf.empty:
                 gdf = ensure_geometry_type(gdf)                
