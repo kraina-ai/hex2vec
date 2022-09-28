@@ -12,7 +12,7 @@ import geopandas as gpd
 import h3
 import osmnx as ox
 import pandas as pd
-from shapely.geometry import mapping
+from shapely.geometry import mapping, MultiPolygon
 
 
 from ..data.download import ensure_geometry_type
@@ -216,10 +216,9 @@ def join_hex_dfs(
         )
 
         # create a list of other parent-level hexagons needed. 
-        # This is because the children are not always geographically contained. 
-        needed_hexes = [hex_id]
-        needed_hexes.extend([hex_parent_dir / h for h in h3.k_ring(hex_id.stem, 1)])
-        
+        # This is because the children are not always geographically contained.
+        needed_hexes = [hex_id, *[hex_parent_dir / h for h in h3.k_ring(hex_id.stem, 1)]]
+
         # create a list of the buffered boundary hexagons. It's not necessary to have the neighbors of these hexagons.
         boundary = False
         if (hex_parent_dir.parent / "boundary.hex.txt").exists():
@@ -232,11 +231,11 @@ def join_hex_dfs(
             if not p_hex.exists() and not boundary:
                 print(f"{p_hex.stem} is needed to completely cover {hex_id.stem} children but missing")
                 drops.append(i)
-        
+
         # drop the missing parent hexagons
         for i in drops[::-1]:
             needed_hexes.pop(i)
-        
+
         # load the tag data. 
         for tag in tag_list:
             tag_dfs = []
@@ -255,7 +254,7 @@ def join_hex_dfs(
                 tag_gdf = gpd.sjoin(
                     tag_gdf, hexes_gdf, how="inner", predicate="intersects"
                 )[["h3", "osmid", tag, "geometry"]]
-                
+
                 # create a save location for the data 
                 save_location = output_dir.joinpath(
                     hex_id.stem,
@@ -352,20 +351,21 @@ def get_buffer_hexes(hexes: Set[str], save_boundary: bool = True, save_path: Pat
                 reported_hex.add(
                     _h
                 )
-    
+
     if save_boundary:
         if (save_path / "boundary.hex.txt").exists():
             with open(save_path / "boundary.hex.txt", 'r') as f:
-                already_marked = set((h for h in f.read().split("\n") if len(h)))
+                already_marked = {h for h in f.read().split("\n") if len(h)}
         else:
             already_marked = set()
 
         with open(save_path / "boundary.hex.txt", 'w') as f:                        
             f.write("\n".join(reported_hex.union(already_marked)))
-    
+
     return reported_hex
 
 def fetch_city_polygon(city_name: str, return_gdf=False) -> Dict:
+    # sourcery skip: raise-specific-error
     from osmnx.geocoder import _geocode_query_to_gdf
 
     try:
@@ -377,16 +377,20 @@ def fetch_city_polygon(city_name: str, return_gdf=False) -> Dict:
         )
         if return_gdf:
             return city_gdf
+        
+        # if the city has a complex polygon, use the convex hull of geometry
+        if isinstance(city_gdf.geometry.iloc[0], MultiPolygon):
+            city_gdf.geometry = city_gdf.geometry.convex_hull
+
         # find the boundary polygon. Turn into geojson
         city_boundary_geojson = mapping(city_gdf.geometry.iloc[0])
         # reverse the coordinates for the h3 api
         city_boundary_geojson['coordinates'] = [[c[::-1] for c in coords] for coords in city_boundary_geojson['coordinates']]
         # return the json
         return city_boundary_geojson
-    
-    except (IndexError, KeyError):
 
-        raise Exception(f"OSMNX did not find a boundary geometry for {city_name}")
+    except (IndexError, KeyError) as e:
 
+        raise Exception(f"OSMNX did not find a boundary geometry for {city_name}") from e
 
 
