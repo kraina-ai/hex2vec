@@ -17,7 +17,7 @@ from src.data.make_dataset import (
 from src.data.load_data import load_filter
 from src.data.utils import TOP_LEVEL_OSM_TAGS
 from src.settings import DATA_DIR, DATA_RAW_DIR, FILTERS_DIR
-from src.utils.tesselate_amazon_data import create_city_from_hex, get_buffer_hexes, group_hex_tags, join_hex_dfs, pull_tags_for_hex, pull_tags_for_hex_gdf, walk_n_queue
+from src.utils.tesselate_amazon_data import create_city_from_hex, fetch_city_polygon, get_buffer_hexes, group_hex_tags, join_hex_dfs, pull_tags_for_hex, pull_tags_for_hex_gdf, walk_n_queue
 
 
 def _check_dir_exists(dir_path: str) -> Path:
@@ -196,7 +196,7 @@ async def _pull_hex_gdf(latlon_df: pd.DataFrame, data_dir: Path, tag_list: List[
         
     # create a queue of needed files
     q = asyncio.Queue()
-    s = asyncio.Semaphore(100)
+    s = asyncio.Semaphore(200)
     tasks = []
     for c, df in latlon_df.groupby('city'):
         city_dir = data_dir.joinpath(c)
@@ -206,7 +206,7 @@ async def _pull_hex_gdf(latlon_df: pd.DataFrame, data_dir: Path, tag_list: List[
     
     # consume the queue asyncronously
     consumers = []
-    for _ in range(100):
+    for _ in range(200):
         consumers.append(asyncio.create_task(
             pull_tags_for_hex(
                 q,
@@ -234,7 +234,7 @@ def pull_all(output_dir, latlon_csv, city, level) -> None:
     
     # settings
     ox.settings.overpass_rate_limit = False
-    ox.settings.overpass_endpoint = "https://overpass.kumi.systems/api"
+    # ox.settings.overpass_endpoint = "https://overpass.kumi.systems/api"
     ox.settings.timeout = 10_000
 
     # handle paths
@@ -251,28 +251,33 @@ def pull_all(output_dir, latlon_csv, city, level) -> None:
         
         # buffer by one neighbor, everywhere (this includes gaps, holes, etx) 
         dfs = []
-        for city, group_df in latlon.groupby('city'):
+        for c, group_df in latlon.groupby('city'):
             
             # get the required hexagons
             h3s = set(group_df['h3'].values)
             
             # buffer by 1 hexagon & save the "boundary" hexagons to a list in the city directory
-            city_dir = output_path.joinpath(city)
+            city_dir = output_path.joinpath(c)
             city_dir.mkdir(parents=True, exist_ok=True)            
             additional_h3s = get_buffer_hexes(h3s, save_boundary=True, save_path=city_dir)
-            dfs.append(
-                pd.concat(
-                    [group_df, pd.DataFrame.from_records([{'city': city, 'h3': _h, 'lat': None, 'lng': None, } for _h in additional_h3s])],
-                    axis=0
-                ).reset_index()
-            )
+            
+            if additional_h3s:
+                dfs.append(
+                    pd.concat(
+                        [group_df, pd.DataFrame.from_records([{'city': c, 'h3': _h, 'lat': None, 'lng': None, } for _h in additional_h3s])],
+                        axis=0
+                    ).reset_index()
+                )
+            else:
+                dfs.append(
+                    group_df
+                )
 
         latlon = pd.concat(dfs).reset_index()
             
         # add in an additional buffer of h3s
         latlon['geometry'] = list(map(h3_to_polygon, latlon['h3']))
         
-
         # pull all of the required hexagons asynchronously
         asyncio.run(
             _pull_hex_gdf(latlon_df=latlon, data_dir=output_path, tag_list=TOP_LEVEL_OSM_TAGS, level=level)
@@ -283,32 +288,24 @@ def pull_all(output_dir, latlon_csv, city, level) -> None:
 
         dfs = []
         for c in city:
-            # find the boundary polygon of the city
-            city_df = ox.geometries_from_place(
-                c, tags={"boundary": "administrative"}
-            )
-            city_boundary = city_df.loc[city_df["name"] == c.split(",")[0], "geometry"].iloc[0]
 
-            # cover the polygon with hexes
-            city_boundary_geojson = mapping(city_boundary)
-            city_boundary_geojson['coordinates'] = [[c[::-1] for c in coords] for coords in city_boundary_geojson['coordinates']]
-            desired_h3s = set(h3.polyfill(city_boundary_geojson, level))
+            # cover the city polygon with hexes
+            desired_h3s = set(h3.polyfill(fetch_city_polygon(c), level))
 
             # buffer by 1 hexagon & save the "boundary" hexagons to a list in the city directory
-            city_dir = output_path.joinpath(city)
+            city_dir = output_path.joinpath(c)
             city_dir.mkdir(parents=True, exist_ok=True)            
             desired_h3s = list(desired_h3s.union(
                 get_buffer_hexes(desired_h3s, save_boundary=True, save_path=city_dir)
             ))
 
             # create a dataframe representing the hexagons
-            city_df = pd.DataFrame({
-                'h3': desired_h3s,
-                'geometry': list(map(h3_to_polygon, desired_h3s))
-            })
-            city_df['city'] = c
             dfs.append(
-                city_df.copy()
+                pd.DataFrame({
+                'h3': desired_h3s,
+                'geometry': list(map(h3_to_polygon, desired_h3s)),
+                'city': [c] * len(desired_h3s)
+                })
             )
 
         asyncio.run(

@@ -2,7 +2,7 @@ import asyncio
 from functools import partial, wraps
 from pathlib import Path
 from random import random
-from typing import Dict, Generator, List, Set
+from typing import Any, Dict, Generator, List, Set
 import warnings
 
 import backoff
@@ -354,6 +354,37 @@ def get_buffer_hexes(hexes: Set[str], save_boundary: bool = True, save_path: Pat
                 )
     
     if save_boundary:
-        with open(save_path / "boundary.hex.txt", 'w') as f:
-            f.write("\n".join(reported_hex)) 
+        if (save_path / "boundary.hex.txt").exists():
+            with open(save_path / "boundary.hex.txt", 'r') as f:
+                already_marked = set((h for h in f.read().split("\n") if len(h)))
+        else:
+            already_marked = set()
+
+        with open(save_path / "boundary.hex.txt", 'w') as f:                        
+            f.write("\n".join(reported_hex.union(already_marked)))
+    
+    return reported_hex
+
+def fetch_city_polygon(city_name: str) -> Dict:
+    from osmnx.geocoder import _geocode_query_to_gdf
+
+    try:
+        # bypass osmnx extras
+        city_gdf = _geocode_query_to_gdf(
+            city_name,
+            by_osmid=False,
+            which_result=None
+        )
+        # find the boundary polygon. Turn into geojson
+        city_boundary_geojson = mapping(city_gdf.geometry.iloc[0])
+        # reverse the coordinates for the h3 api
+        city_boundary_geojson['coordinates'] = [[c[::-1] for c in coords] for coords in city_boundary_geojson['coordinates']]
+        # return the json
+        return city_boundary_geojson
+    
+    except (IndexError, KeyError):
+
+        raise Exception(f"OSMNX did not find a boundary geometry for {city_name}")
+
+
 
