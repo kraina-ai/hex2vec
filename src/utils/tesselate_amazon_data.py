@@ -12,7 +12,7 @@ import geopandas as gpd
 import h3
 import osmnx as ox
 import pandas as pd
-from shapely.geometry import mapping
+from shapely.geometry import mapping, MultiPolygon
 
 
 from ..data.download import ensure_geometry_type
@@ -364,7 +364,7 @@ def get_buffer_hexes(hexes: Set[str], save_boundary: bool = True, save_path: Pat
 
     return reported_hex
 
-def fetch_city_polygon(city_name: str) -> Dict:
+def fetch_city_polygon(city_name: str, return_gdf=False) -> Dict:
     # sourcery skip: raise-specific-error
     from osmnx.geocoder import _geocode_query_to_gdf
 
@@ -375,6 +375,13 @@ def fetch_city_polygon(city_name: str) -> Dict:
             by_osmid=False,
             which_result=None
         )
+        if return_gdf:
+            return city_gdf
+        
+        # if the city has a complex polygon, use the convex hull of geometry
+        if isinstance(city_gdf.geometry.iloc[0], MultiPolygon):
+            city_gdf.geometry = city_gdf.geometry.convex_hull
+
         # find the boundary polygon. Turn into geojson
         city_boundary_geojson = mapping(city_gdf.geometry.iloc[0])
         # reverse the coordinates for the h3 api
@@ -385,6 +392,5 @@ def fetch_city_polygon(city_name: str) -> Dict:
     except (IndexError, KeyError) as e:
 
         raise Exception(f"OSMNX did not find a boundary geometry for {city_name}") from e
-
 
 
