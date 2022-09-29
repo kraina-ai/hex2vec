@@ -1,7 +1,9 @@
+import os
 import asyncio
 from functools import partial, wraps
 from pathlib import Path
 from random import random
+from joblib import Parallel, delayed
 from typing import Any, Dict, Generator, List, Set
 import warnings
 
@@ -21,6 +23,10 @@ from ..data.make_dataset import group_df_by_tag_values, h3_to_polygon, prepare_c
 from ..data.utils import TOP_LEVEL_OSM_TAGS
 from ..settings import DATA_PROCESSED_DIR, DATA_RAW_DIR
 
+
+# chunk list
+def chunker_list(seq, size):
+    return (seq[i::size] for i in range(size))
 
 
 # little of a hack to get around the fact that osmnx doesn't have async
@@ -236,34 +242,38 @@ def join_hex_dfs(
         for i in drops[::-1]:
             needed_hexes.pop(i)
 
-        # load the tag data. 
-        for tag in tag_list:
-            tag_dfs = []
-            for p_hex in needed_hexes:
-                tag_gdf = load_city_tag(p_hex, tag=tag, data_dir=hex_id)
-                if tag_gdf is not None:
-                    tag_dfs.append(tag_gdf)
-            if len(tag_dfs):
+        # # load the tag data in parallel. This could get RAM heavy. Doesn't work on cluster
+        ncpus = os.cpu_count()
+        # Parallel(n_jobs=ncpus)(delayed(_map_2_small_hex)(target_resolution, output_dir, hex_id, hexes_gdf.copy(), needed_hexes, chunk_list) for chunk_list in chunker_list(tag_list, ncpus))
+        # for tag in tag_list:
+        _map_2_small_hex(target_resolution, output_dir, hex_id, hexes_gdf.copy(), needed_hexes, tag_list)
 
-                # create a hex + neighbors super df
-                tag_gdf = pd.concat(tag_dfs, axis=0)
-                # drop duplicated osmids
-                tag_gdf = tag_gdf.drop_duplicates(subset=['osmid'])
-
-                # spatial join of the hexes with the tag data. Only save data that is in the target hexagons.
-                tag_gdf = gpd.sjoin(
-                    tag_gdf, hexes_gdf, how="inner", predicate="intersects"
-                )[["h3", "osmid", tag, "geometry"]]
-
-                # create a save location for the data 
-                save_location = output_dir.joinpath(
-                    hex_id.stem,
-                )
-                save_location.mkdir(parents=True, exist_ok=True)
-                tag_gdf.to_pickle(
-                    save_location.joinpath(f"{tag}_{target_resolution}.pkl").absolute(),
-                    protocol=4,
-                )
+def _map_2_small_hex(target_resolution, output_dir, hex_id, hexes_gdf, needed_hexes, tag_list):
+    for tag in tag_list:
+        tag_dfs = []
+        for p_hex in needed_hexes:
+            tag_gdf = load_city_tag(p_hex, tag=tag, data_dir=hex_id)
+            if tag_gdf is not None:
+                tag_dfs.append(tag_gdf)
+        
+        if len(tag_dfs):
+            # create a hex + neighbors super df
+            tag_gdf = pd.concat(tag_dfs, axis=0)
+            # drop duplicated osmids
+            tag_gdf = tag_gdf.drop_duplicates(subset=['osmid'])
+            # spatial join of the hexes with the tag data. Only save data that is in the target hexagons.
+            tag_gdf = gpd.sjoin(
+                        tag_gdf, hexes_gdf, how="inner", predicate="intersects"
+                    )[["h3", "osmid", tag, "geometry"]]
+            # create a save location for the data 
+            save_location = output_dir.joinpath(
+                        hex_id.stem,
+                    )
+            save_location.mkdir(parents=True, exist_ok=True)
+            tag_gdf.to_pickle(
+                        save_location.joinpath(f"{tag}_{target_resolution}.pkl").absolute(),
+                        protocol=4,
+                    )
 
 
 def group_h3_tags(
@@ -364,7 +374,7 @@ def get_buffer_hexes(hexes: Set[str], save_boundary: bool = True, save_path: Pat
 
     return reported_hex
 
-def fetch_city_polygon(city_name: str, return_gdf=False) -> Dict:
+def fetch_city_polygon(city_name: str, return_gdf: bool=False, convex_hull: bool=False) -> Dict:
     # sourcery skip: raise-specific-error
     from osmnx.geocoder import _geocode_query_to_gdf
 
@@ -379,7 +389,7 @@ def fetch_city_polygon(city_name: str, return_gdf=False) -> Dict:
             return city_gdf
         
         # if the city has a complex polygon, use the convex hull of geometry
-        if isinstance(city_gdf.geometry.iloc[0], MultiPolygon):
+        if convex_hull or isinstance(city_gdf.geometry.iloc[0], MultiPolygon):
             city_gdf.geometry = city_gdf.geometry.convex_hull
 
         # find the boundary polygon. Turn into geojson

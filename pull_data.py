@@ -56,7 +56,8 @@ def group_city_hexagons(data_dir: str, output_dir: str, resolution: int):
 @click.argument("output_dir", type=click.Path(exists=True))
 @click.option("--raw-resolution", type=int)
 @click.option("--resolution", "-r", multiple=True, type=int, )
-def group_all_city_hexagons(data_dir: str, interim_dir: str, output_dir: str, raw_resolution: int, resolution: List[int]):
+@click.option("--city", "-c", multiple=True, type=str, )
+def group_all_city_hexagons(data_dir: str, interim_dir: str, output_dir: str, raw_resolution: int, resolution: List[int], city: List[str]):
     # make sure the data directory exists
     data_dir = _check_dir_exists(data_dir)
     interim_dir = _check_dir_exists(interim_dir)
@@ -66,42 +67,43 @@ def group_all_city_hexagons(data_dir: str, interim_dir: str, output_dir: str, ra
     output_dir.mkdir(exist_ok=True, parents=True)
 
  
-    # loop and create dataframe. No mp for RAM issues
-    for city, res in itertools.product(
+    # loop and create dataframe. No mp for RAM issues. 
+    for c, res in itertools.product(
             _iter_cities(data_dir), resolution
         ):
 
-        # for city, res in itertools.product(_iter_cities(data_dir), resolutions):
-        if "Austin" not in city.name:
+        # break the loop if the city filter has been created
+        if c and c.stem not in city:
+            continue
         
-            print(f"Processing {city.name} - h3 {res}")
-            interim_path = interim_dir / city.stem / f"resolution_{res}"
-            interim_path.mkdir(parents=True, exist_ok=True)
-            
-            join_hex_dfs(
-                city.joinpath(f"resolution_{raw_resolution}"), 
-                TOP_LEVEL_OSM_TAGS, 
-                res, 
-                interim_path
-            )
+        print(f"Processing {c.name} - h3 {res}")
+        interim_path = interim_dir / c.stem / f"resolution_{res}"
+        interim_path.mkdir(parents=True, exist_ok=True)
+        
+        join_hex_dfs(
+            c.joinpath(f"resolution_{raw_resolution}"), 
+            TOP_LEVEL_OSM_TAGS, 
+            res, 
+            interim_path
+        )
 
-            print(f"Grouping {city.name} - h3 {res}")
-            group_hex_tags(
-                hex_parent_dir=interim_path,
-                tag_list=TOP_LEVEL_OSM_TAGS,
-                output_dir=interim_path,
-                resolution=res,
-                filter_values=load_filter(Path() / "filters" / "from_wiki.json"),    
-            )
+        print(f"Grouping {c.name} - h3 {res}")
+        group_hex_tags(
+            hex_parent_dir=interim_path,
+            tag_list=TOP_LEVEL_OSM_TAGS,
+            output_dir=interim_path,
+            resolution=res,
+            filter_values=load_filter(Path() / "filters" / "from_wiki.json"),    
+        )
 
-            print(f"Creating City DF {city.name} - h3 {res}")
-            city_out_path = output_dir / city.stem 
-            city_out_path.mkdir(exist_ok=True, parents=True)
-            create_city_from_hex(
-                hex_parent_dir=interim_path,
-                output_dir=city_out_path,
-                resolution=res
-            )
+        print(f"Creating City DF {c.name} - h3 {res}")
+        city_out_path = output_dir / c.stem 
+        city_out_path.mkdir(exist_ok=True, parents=True)
+        create_city_from_hex(
+            hex_parent_dir=interim_path,
+            output_dir=city_out_path,
+            resolution=res
+        )
 
 
 @click.command()
@@ -290,13 +292,13 @@ def pull_all(output_dir, latlon_csv, city, level) -> None:
         for c in city:
 
             # cover the city polygon with hexes
-            desired_h3s = set(h3.polyfill(fetch_city_polygon(c), level))
+            desired_h3s = set(h3.polyfill(fetch_city_polygon(c, convex_hull=True), level))
 
             # buffer by 1 hexagon & save the "boundary" hexagons to a list in the city directory
             city_dir = output_path.joinpath(c)
             city_dir.mkdir(parents=True, exist_ok=True)            
             desired_h3s = list(desired_h3s.union(
-                get_buffer_hexes(desired_h3s, save_boundary=True, save_path=city_dir)
+                get_buffer_hexes(desired_h3s, save_boundary=True, save_path=city_dir,)
             ))
 
             # create a dataframe representing the hexagons
