@@ -1,3 +1,5 @@
+import asyncio
+from functools import wraps, partial
 import osmnx as ox
 from shapely import wkt
 from geopandas import GeoDataFrame
@@ -35,6 +37,23 @@ def download_whole_city(city_name: Union[str, List[str]], save_path: Path, timeo
                 tag_gdf.to_pickle(tag_path)
         else:
             print(f"Tag: {tag} exists for city: {city_name}")
+
+
+# little of a hack to get around the fact that osmnx doesn't have async
+def async_wrap(func):
+    @wraps(func)
+    async def run(*args, loop=None, executor=None, **kwargs):
+        if loop is None:
+            loop = asyncio.get_event_loop()
+        pfunc = partial(func, *args, **kwargs)
+        return await loop.run_in_executor(executor, pfunc)
+
+    return run
+
+@async_wrap
+def download_whole_city_async(*args, **kwargs):
+    download_whole_city(*args, **kwargs)
+
 
 
 def download_whole_osm_tag(
