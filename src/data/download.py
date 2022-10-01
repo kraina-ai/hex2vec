@@ -50,10 +50,25 @@ def async_wrap(func):
 
     return run
 
-@async_wrap
-def download_whole_city_async(*args, **kwargs):
-    download_whole_city(*args, **kwargs)
 
+async def download_whole_city_async(city_name: Union[str, List[str]], save_path: Path, timeout: int = 10000):
+    name = city_name if type(city_name) == str else city_name[0]
+    print(name)
+    try:
+        area_path = save_path.joinpath(name)
+    except AttributeError:
+        print("help")
+    area_path.mkdir(parents=True, exist_ok=True)
+    for tag in TOP_LEVEL_OSM_TAGS:
+        tag_path = area_path.joinpath(f"{tag}.pkl")
+        if not tag_path.exists():
+            tag_gdf = await download_whole_osm_tag_async(city_name, tag, timeout)
+            if tag_gdf.empty:
+                print(f"Tag: {tag} empty for city: {city_name}")
+            else:
+                tag_gdf.to_pickle(tag_path)
+        else:
+            print(f"Tag: {tag} exists for city: {city_name}")
 
 
 def download_whole_osm_tag(
@@ -61,6 +76,9 @@ def download_whole_osm_tag(
 ) -> GeoDataFrame:
     return download_specific_tags(area_name, {tag: True}, timeout)
 
+@async_wrap
+def download_whole_osm_tag_async(*args, **kwargs):
+    return download_whole_osm_tag(*args, **kwargs)
 
 def download_specific_tags(
     area_name: Union[str, Dict[str, str]],
