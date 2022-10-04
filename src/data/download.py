@@ -54,10 +54,7 @@ def async_wrap(func):
 async def download_whole_city_async(city_name: Union[str, List[str]], save_path: Path, timeout: int = 10000):
     name = city_name if type(city_name) == str else city_name[0]
     print(name)
-    try:
-        area_path = save_path.joinpath(name)
-    except AttributeError:
-        print("help")
+    area_path = save_path.joinpath(name)
     area_path.mkdir(parents=True, exist_ok=True)
     for tag in TOP_LEVEL_OSM_TAGS:
         tag_path = area_path.joinpath(f"{tag}.pkl")

@@ -4,7 +4,7 @@ from functools import partial, wraps
 from pathlib import Path
 from random import random
 from joblib import Parallel, delayed
-from typing import Any, Dict, Generator, List, Set
+from typing import Any, Dict, Generator, List, Set, Union
 import warnings
 
 import backoff
@@ -374,30 +374,60 @@ def get_buffer_hexes(hexes: Set[str], save_boundary: bool = True, save_path: Pat
 
     return reported_hex
 
-def fetch_city_polygon(city_name: str, return_gdf: bool=False, convex_hull: bool=False) -> Dict:
+def fetch_city_h3s(city_name: Union[str, List[str]], return_gdf: bool=False, convex_hull: bool=False, res: int = None) -> Dict:
     # sourcery skip: raise-specific-error
     from osmnx.geocoder import _geocode_query_to_gdf
+    from shapely.geometry import Polygon
+
+    if not return_gdf:
+        assert res is not None, "You must either call for the return of the gdf or specify a resolution"
 
     try:
         # bypass osmnx extras
-        city_gdf = _geocode_query_to_gdf(
-            city_name,
-            by_osmid=False,
-            which_result=None
-        )
+        if isinstance(city_name, str):
+            city_gdf = _geocode_query_to_gdf(
+                city_name,
+                by_osmid=False,
+                which_result=None
+            )
+        else:
+            city_gdf = pd.concat(
+                _geocode_query_to_gdf(
+                    c,
+                    by_osmid=False,
+                    which_result=None
+                ) for c in city_name
+            )
+
+
         if return_gdf:
             return city_gdf
         
         # if the city has a complex polygon, use the convex hull of geometry
-        if convex_hull or isinstance(city_gdf.geometry.iloc[0], MultiPolygon):
+        if convex_hull: #or isinstance(city_gdf.geometry.iloc[0], MultiPolygon):
             city_gdf.geometry = city_gdf.geometry.convex_hull
 
-        # find the boundary polygon. Turn into geojson
-        city_boundary_geojson = mapping(city_gdf.geometry.iloc[0])
-        # reverse the coordinates for the h3 api
-        city_boundary_geojson['coordinates'] = [[c[::-1] for c in coords] for coords in city_boundary_geojson['coordinates']]
-        # return the json
-        return city_boundary_geojson
+        if any(city_gdf.geometry.map(lambda x: isinstance(x, MultiPolygon))):
+            city_gdf = city_gdf.explode(index_parts=False).reset_index()
+
+        h3s = set()
+        def h3_mapper(poly: Polygon) -> None:
+            poly = mapping(poly)
+            # have to reverse the coordinates...
+            poly['coordinates'] = [[c[::-1] for c in coords] for coords in poly['coordinates']]
+            _h3s = h3.polyfill(
+                poly,
+                res=res
+            )
+            h3s.update(_h3s)
+
+        city_gdf.geometry.apply(h3_mapper)
+        return h3s
+
+        # # reverse the coordinates for the h3 api
+        # city_boundary_geojson['coordinates'] = [[c[::-1] for c in coords] for coords in city_boundary_geojson['coordinates']]
+        # # return the json
+        # return city_boundary_geojson
 
     except (IndexError, KeyError) as e:
 

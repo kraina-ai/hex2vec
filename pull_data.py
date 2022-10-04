@@ -1,5 +1,7 @@
 import asyncio
 import itertools
+import json
+import os
 from typing import Iterable, List
 import pandas as pd
 from pathlib import Path
@@ -12,12 +14,11 @@ from src.data.make_dataset import (
     add_h3_indices_to_city_explicit_paths,
     group_city_tags,
     h3_to_polygon,
-    save_hexes_polygons_for_city,
 )
 from src.data.load_data import load_filter
 from src.data.utils import TOP_LEVEL_OSM_TAGS
-from src.settings import DATA_DIR, DATA_RAW_DIR, FILTERS_DIR
-from src.utils.tesselate_amazon_data import create_city_from_hex, fetch_city_polygon, get_buffer_hexes, group_hex_tags, join_hex_dfs, pull_tags_for_hex, pull_tags_for_hex_gdf, walk_n_queue
+from src.settings import DATA_RAW_DIR, FILTERS_DIR
+from src.utils.tesselate_amazon_data import create_city_from_hex, fetch_city_h3s, get_buffer_hexes, group_hex_tags, join_hex_dfs, pull_tags_for_hex, walk_n_queue
 
 
 def _check_dir_exists(dir_path: str) -> Path:
@@ -66,29 +67,43 @@ def group_all_city_hexagons(data_dir: str, interim_dir: str, output_dir: str, ra
     output_dir = Path(output_dir)
     output_dir.mkdir(exist_ok=True, parents=True)
 
- 
-    # loop and create dataframe. No mp for RAM issues. 
-    for c, res in itertools.product(
-            _iter_cities(data_dir), resolution
-        ):
+    from joblib import Parallel, delayed
 
-        # break the loop if the city filter has been created
-        if c and c.stem not in city:
-            continue
+    Parallel(n_jobs=os.cpu_count() - 1)(
+        delayed(transform_city)(
+            interim_dir, output_dir, raw_resolution, c, res
+        )
+        for c, res in itertools.product(
+            _iter_cities(data_dir), resolution
+        ) if (city is None) or (c.stem in city)
+    )
+    
+    # # loop and create dataframe. With MP on new big boy cluster 
+    # for c, res in itertools.product(
+    #         _iter_cities(data_dir), resolution
+    #     ):
+
+    #     # break the loop if the city filter has been created
+    #     if city and c.stem not in city:
+    #         continue
         
-        print(f"Processing {c.name} - h3 {res}")
-        interim_path = interim_dir / c.stem / f"resolution_{res}"
-        interim_path.mkdir(parents=True, exist_ok=True)
+    #     transform_city(interim_dir, output_dir, raw_resolution, c, res)
+
+def transform_city(interim_dir, output_dir, raw_resolution, c, res):
+    
+    print(f"Processing {c.name} - h3 {res}")
+    interim_path = interim_dir / c.stem / f"resolution_{res}"
+    interim_path.mkdir(parents=True, exist_ok=True)
         
-        join_hex_dfs(
+    join_hex_dfs(
             c.joinpath(f"resolution_{raw_resolution}"), 
             TOP_LEVEL_OSM_TAGS, 
             res, 
             interim_path
         )
 
-        print(f"Grouping {c.name} - h3 {res}")
-        group_hex_tags(
+    print(f"Grouping {c.name} - h3 {res}")
+    group_hex_tags(
             hex_parent_dir=interim_path,
             tag_list=TOP_LEVEL_OSM_TAGS,
             output_dir=interim_path,
@@ -96,10 +111,10 @@ def group_all_city_hexagons(data_dir: str, interim_dir: str, output_dir: str, ra
             filter_values=load_filter(Path() / "filters" / "from_wiki.json"),    
         )
 
-        print(f"Creating City DF {c.name} - h3 {res}")
-        city_out_path = output_dir / c.stem 
-        city_out_path.mkdir(exist_ok=True, parents=True)
-        create_city_from_hex(
+    print(f"Creating City DF {c.name} - h3 {res}")
+    city_out_path = output_dir / c.stem 
+    city_out_path.mkdir(exist_ok=True, parents=True)
+    create_city_from_hex(
             hex_parent_dir=interim_path,
             output_dir=city_out_path,
             resolution=res
@@ -194,6 +209,7 @@ def group_all_city_tags(data_dir: str, output_dir: str, resolution: int, filter_
 
 
 
+
 async def _pull_hex_gdf(latlon_df: pd.DataFrame, data_dir: Path, tag_list: List[str], level: int) -> None:
         
     # create a queue of needed files
@@ -228,8 +244,10 @@ async def _pull_hex_gdf(latlon_df: pd.DataFrame, data_dir: Path, tag_list: List[
 @click.argument("output-dir")
 @click.option("--latlon-csv", type=click.Path(exists=True), help="path to file lat/lng pairs. Columns should be 'lat', 'lng', and 'city'")
 @click.option("--city", "-c", multiple=True, type=str)
+@click.option("--city-file", type=click.Path(exists=True), help="For lots of cities. Should be a Json File {cities: [city1, ...]}")
 @click.option("--level", "-l", type=int, help="H3 level for which to pull")
-def pull_all(output_dir, latlon_csv, city, level) -> None:
+@click.option("--convex-hull", is_flag=True, default=False, help="Use convex hull to generalize the city shape")
+def pull_all(output_dir, latlon_csv, city, city_file, level, convex_hull) -> None:
     # necessary imports
     import osmnx as ox
     from shapely.geometry import mapping
@@ -285,6 +303,14 @@ def pull_all(output_dir, latlon_csv, city, level) -> None:
             _pull_hex_gdf(latlon_df=latlon, data_dir=output_path, tag_list=TOP_LEVEL_OSM_TAGS, level=level)
         )
     
+    # handle the city file
+    if city_file:
+        
+        with open(city_file, 'r') as f:
+            _d = json.load(f)
+            # why didn't I make this plural....
+            city = _d['cities']
+
     if city:
         # pull cities that may be desired
 
@@ -292,7 +318,10 @@ def pull_all(output_dir, latlon_csv, city, level) -> None:
         for c in city:
 
             # cover the city polygon with hexes
-            desired_h3s = set(h3.polyfill(fetch_city_polygon(c, convex_hull=True), level))
+            desired_h3s = fetch_city_h3s(c, convex_hull=convex_hull, res=level)
+
+            # c can be a list in the case of compound locations
+            c = c[0] if isinstance(c, list) else c
 
             # buffer by 1 hexagon & save the "boundary" hexagons to a list in the city directory
             city_dir = output_path.joinpath(c)
