@@ -2,7 +2,7 @@ import asyncio
 import itertools
 import json
 import os
-from typing import Iterable, List
+from typing import Iterable, List, Tuple
 import pandas as pd
 from pathlib import Path
 import click
@@ -58,7 +58,8 @@ def group_city_hexagons(data_dir: str, output_dir: str, resolution: int):
 @click.option("--raw-resolution", type=int)
 @click.option("--resolution", "-r", multiple=True, type=int, )
 @click.option("--city", "-c", multiple=True, type=str, )
-def group_all_city_hexagons(data_dir: str, interim_dir: str, output_dir: str, raw_resolution: int, resolution: List[int], city: List[str]):
+@click.option("--city-file", type=click.Path(exists=True), help="For lots of cities. Should be a Json File {cities: [city1, ...]}")
+def group_all_city_hexagons(data_dir: str, interim_dir: str, output_dir: str, raw_resolution: int, resolution: List[int], city: Tuple[str], city_file: str):
     # make sure the data directory exists
     data_dir = _check_dir_exists(data_dir)
     interim_dir = _check_dir_exists(interim_dir)
@@ -66,6 +67,16 @@ def group_all_city_hexagons(data_dir: str, interim_dir: str, output_dir: str, ra
     # create the output dir
     output_dir = Path(output_dir)
     output_dir.mkdir(exist_ok=True, parents=True)
+
+    city = set(city)
+
+    # open the city file
+    # handle the city file
+    if city_file:
+        with open(city_file, 'r') as f:
+            _d = json.load(f)
+            # why didn't I make this plural....
+            city.update(set(_d['cities']))
 
     from joblib import Parallel, delayed
 
@@ -75,7 +86,7 @@ def group_all_city_hexagons(data_dir: str, interim_dir: str, output_dir: str, ra
         )
         for c, res in itertools.product(
             _iter_cities(data_dir), resolution
-        ) if (city is None) or (c.stem in city)
+        ) if (not len(city)) or (c.stem in city)
     )
     
     # # loop and create dataframe. With MP on new big boy cluster 

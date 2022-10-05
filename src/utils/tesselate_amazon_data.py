@@ -403,13 +403,14 @@ def fetch_city_h3s(city_name: Union[str, List[str]], return_gdf: bool=False, con
         if return_gdf:
             return city_gdf
         
-        # if the city has a complex polygon, use the convex hull of geometry
+        # if use the convex hull of geometry if specified
         if convex_hull: #or isinstance(city_gdf.geometry.iloc[0], MultiPolygon):
             city_gdf.geometry = city_gdf.geometry.convex_hull
 
+        # if the city has a multi-polygon geometry, then explod into individual polygons
         if any(city_gdf.geometry.map(lambda x: isinstance(x, MultiPolygon))):
             city_gdf = city_gdf.explode(index_parts=False).reset_index()
-
+        
         h3s = set()
         def h3_mapper(poly: Polygon) -> None:
             poly = mapping(poly)
