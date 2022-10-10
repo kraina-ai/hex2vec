@@ -1,0 +1,7 @@
+{
+    "cities": [
+        ["Moscow, Russia", "Zelenogradsky Administrative Okrug", "Western Administrative Okrug", "Novomoskovsky Administrative Okrug", "Troitsky Administrative Okrug"],
+        ["London, United Kingdom", "City of London"],
+        "New York City, USA"
+    ]
+}

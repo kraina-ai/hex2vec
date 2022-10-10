@@ -392,11 +392,11 @@ def fetch_city_h3s(city_name: Union[str, List[str]], return_gdf: bool=False, con
             )
         else:
             city_gdf = pd.concat(
-                _geocode_query_to_gdf(
+                (_geocode_query_to_gdf(
                     c,
                     by_osmid=False,
                     which_result=None
-                ) for c in city_name
+                ) for c in city_name)
             )
 
 
