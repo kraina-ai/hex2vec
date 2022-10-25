@@ -17,9 +17,11 @@ class Tag:
         if "." in tag:
             self._tag = tag.split(".")[0]
             self._subtag = tag.split(".")[1]
+            self._other_tags = tag.split(".")[2:]
         else:
             self._tag = tag
             self._subtag = None
+            self._other_tags = (None,)
 
         # store filter values as set for faster lookup
         self.filter_values = set(filter_values) if filter_values else None
@@ -37,7 +39,11 @@ class Tag:
     def tag(
         self,
     ) -> str:
-        return ".".join([self._tag, self._subtag]) if self._subtag else self._tag
+        return (
+            ".".join([self._tag, self._subtag, *self._other_tags])
+            if self._subtag
+            else self._tag
+        )
 
     @property
     def columns(
@@ -89,7 +95,7 @@ class BuildingArea(Tag):
     def group_df_by_tag_values(self, df):
         # create the area column
         # convert the crs to meters
-        df = self._create_area_column(df)
+        df = self._create_area_column(df.copy(deep=True))
         # drop zero values
         df = df[df[self.tag] > 0]
         tmp = df.reset_index(drop=True)[["h3", self.tag]].copy(deep=True)
@@ -105,9 +111,50 @@ class BuildingArea(Tag):
         return super().agg_dict(df, level=level)
 
 
+class ParkingArea(Tag):
+    def __init__(self, tag: str = "parking.area", *args, **kwargs) -> None:
+        super().__init__(tag, *args, **kwargs)
+
+        self._filter_values = {
+            "bicycle_parking",
+            "motorcycle_parking",
+            "parking",
+            "parking_entrance",
+            "parking_space",
+        }
+
+    @property
+    def osmxtag(self) -> str:
+        return 'amenity'
+
+    def _create_area_column(self, df):
+        # create the area column
+        # convert the crs to meters
+        df[self.tag] = df["geometry"].to_crs(epsg=3857).area
+        return df
+
+    def group_df_by_tag_values(self, df):
+        # create the area column
+        # convert the crs to meters
+        # filter out vlues that we don't want
+        df = df.loc[df[self.osmxtag].isin(self._filter_values)].copy()
+        df = self._create_area_column(df)
+        # drop zero values
+        df = df[df[self.tag] > 0]
+        tmp = df.reset_index(drop=True)[["h3", self.tag]].copy(deep=True)
+        indicators = tmp.groupby("h3").sum().astype("float32")
+        return indicators.reset_index()
+
+    def filter_df_by_tag_values(self, df):
+        return df
+
+    def agg_dict(self, df, level: str = "h3"):
+        return super().agg_dict(df, level=level)
+
+
 def build_tag(tag: str, *args, **kwargs) -> Tag:
     try:
-        return {"building.area": BuildingArea,}[
+        return {"building.area": BuildingArea, "parking.area": ParkingArea,}[
             tag
         ](tag, *args, **kwargs)
     except KeyError:

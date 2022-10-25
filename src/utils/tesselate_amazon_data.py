@@ -2,10 +2,7 @@ import os
 import asyncio
 from functools import partial, wraps
 from pathlib import Path
-from random import random
-from joblib import Parallel, delayed
-from typing import Any, Dict, Generator, List, Set, Union
-import warnings
+from typing import Dict, Generator, List, Set, Union
 
 import backoff
 from tqdm import tqdm
@@ -19,10 +16,9 @@ from shapely.geometry import mapping, MultiPolygon
 
 from ..data.download import ensure_geometry_type
 from ..data.load_data import load_city_tag, load_city_tag_h3
-from ..data.make_dataset import group_df_by_tag_values, h3_to_polygon, prepare_city_path
-from ..data.utils import TOP_LEVEL_OSM_TAGS
-from ..settings import DATA_PROCESSED_DIR, DATA_RAW_DIR
-from src.utils.advanced_tags import Tag, build_tag
+from ..data.make_dataset import h3_to_polygon
+from ..settings import DATA_RAW_DIR
+from src.utils.advanced_tags import Tag
 
 # chunk list
 def chunker_list(seq, size):
