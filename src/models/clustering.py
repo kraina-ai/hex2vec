@@ -24,6 +24,7 @@ class TfidfEmbedder(Embedder):
     def transform(self, X: np.array) -> np.array:
         return self.embedder.transform(X).toarray()
 
+
 class NormalizingEmbedder(Embedder):
     def __init__(self, normalization_type: str = "std") -> None:
         if normalization_type == "std":

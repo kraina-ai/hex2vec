@@ -11,18 +11,26 @@ from .utils import TOP_LEVEL_OSM_TAGS
 from shapely.errors import ShapelyDeprecationWarning
 import warnings
 
-def ensure_geometry_type(df: GeoDataFrame, geometry_column: str = "geometry") -> GeoDataFrame:
+
+def ensure_geometry_type(
+    df: GeoDataFrame, geometry_column: str = "geometry"
+) -> GeoDataFrame:
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=ShapelyDeprecationWarning)
+
         def ensure_geometry_type_correct(geometry):
             return wkt.loads(geometry) if type(geometry) == str else geometry
 
         if geometry_column in df.columns:
-            df[geometry_column] = df[geometry_column].apply(ensure_geometry_type_correct)
+            df[geometry_column] = df[geometry_column].apply(
+                ensure_geometry_type_correct
+            )
         return df
 
 
-def download_whole_city(city_name: Union[str, List[str]], save_path: Path, timeout: int = 10000):
+def download_whole_city(
+    city_name: Union[str, List[str]], save_path: Path, timeout: int = 10000
+):
     name = city_name if type(city_name) == str else city_name[0]
     print(name)
     area_path = save_path.joinpath(name)
@@ -51,7 +59,9 @@ def async_wrap(func):
     return run
 
 
-async def download_whole_city_async(city_name: Union[str, List[str]], save_path: Path, timeout: int = 10000):
+async def download_whole_city_async(
+    city_name: Union[str, List[str]], save_path: Path, timeout: int = 10000
+):
     name = city_name if type(city_name) == str else city_name[0]
     print(name)
     area_path = save_path.joinpath(name)
@@ -73,9 +83,11 @@ def download_whole_osm_tag(
 ) -> GeoDataFrame:
     return download_specific_tags(area_name, {tag: True}, timeout)
 
+
 @async_wrap
 def download_whole_osm_tag_async(*args, **kwargs):
     return download_whole_osm_tag(*args, **kwargs)
+
 
 def download_specific_tags(
     area_name: Union[str, Dict[str, str]],

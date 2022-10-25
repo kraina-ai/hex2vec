@@ -79,17 +79,15 @@ class NearestNeighbor:
 
         # just create a single dataframe for all tags
         dfs = [
-                load_city_tag(
-                    file.parent, file.stem, filter_values=self._filter
-                ).to_crs(self._utm_proj.crs)
-                for file in self._data_dir.joinpath(hex_id).iterdir()
-                if (file.suffix == ".pkl") and (file.stem in self._tags)
-            ]
+            load_city_tag(file.parent, file.stem, filter_values=self._filter).to_crs(
+                self._utm_proj.crs
+            )
+            for file in self._data_dir.joinpath(hex_id).iterdir()
+            if (file.suffix == ".pkl") and (file.stem in self._tags)
+        ]
 
         if len(dfs):
-            df = pd.concat(
-                dfs
-            )
+            df = pd.concat(dfs)
         else:
             return None
 
@@ -292,7 +290,7 @@ class NearestNeighbor:
             city_dir=self._data_dir,
             tag_list=self._tags,
         )
-        
+
         self._all_hexes.append(hex_id)
 
     def count_tags(

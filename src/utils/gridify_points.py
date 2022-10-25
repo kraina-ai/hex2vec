@@ -5,14 +5,10 @@ This comes from https://github.com/mthh/gpd_lite_toolbox/blob/ce4553c139775953c4
 import numpy as np
 
 
-
-
-
-
 def gridify_data(gdf, height, col_name, cut=True, method=np.mean):
     """
-    Taken directly from 
-    
+    Taken directly from
+
     This comes from https://github.com/mthh/gpd_lite_toolbox/blob/ce4553c139775953c49d8756960d0a166b67c6bf/gpd_lite_toolbox/core.py#L637
 
 
@@ -47,17 +43,16 @@ def gridify_data(gdf, height, col_name, cut=True, method=np.mean):
     <matplotlib.axes._subplots.AxesSubplot at 0x7f8336373a20>
     ...
     """
-    if not all(gdf.geometry.type == 'Point'):
+    if not all(gdf.geometry.type == "Point"):
         raise ValueError("Can only gridify scattered data (Point)")
-    if not gdf[col_name].dtype.kind in {'i', 'f'}:
+    if not gdf[col_name].dtype.kind in {"i", "f"}:
         raise ValueError("Target column have to be a numerical field")
 
     grid = make_grid(gdf, height, cut)
     grid[col_name] = -1
     index = make_index([i.bounds for i in gdf.geometry])
     for id_cell in range(len(grid)):
-        ids_pts = list(index.intersection(
-            grid.geometry[id_cell].bounds, objects='raw'))
+        ids_pts = list(index.intersection(grid.geometry[id_cell].bounds, objects="raw"))
         if ids_pts:
             res = method(gdf.iloc[ids_pts][col_name])
             grid.loc[id_cell, col_name] = res

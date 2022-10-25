@@ -176,7 +176,12 @@ def merge_all_tags_for_city(city: str, resolution: int):
 
 def group_df_by_tag_values(df, tag: str):
     tmp = df.reset_index(drop=True)[["h3", tag]].copy(deep=True)
-    indicators = pd.get_dummies(tmp, columns=[tag], prefix=tag).groupby("h3").sum().astype("int16")
+    indicators = (
+        pd.get_dummies(tmp, columns=[tag], prefix=tag)
+        .groupby("h3")
+        .sum()
+        .astype("int16")
+    )
     return indicators.reset_index()
 
 

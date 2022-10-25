@@ -9,7 +9,8 @@ from src.settings import KEPLER_CONFIG_DIR
 def save_config(kepler: KeplerGl, config_name: str) -> Path:
     with open(KEPLER_CONFIG_DIR.joinpath(f"{config_name}.json"), "wt") as f:
         json.dump(kepler.config, f)
-    return 
+    return
+
 
 def load_config(config_name: str) -> Union[Dict, None]:
     try:

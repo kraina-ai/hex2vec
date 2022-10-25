@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Dict, Generator, List
 import json
 
+from src.utils.advanced_tags import Tag
+
 
 # def split_n_save_df(df: DataFrame, path: Path, n: int) -> None:
 #     base_name = path.name[:path.name.rfind(".")]
@@ -56,22 +58,21 @@ def load_gdf(path: Path, crs="EPSG:4326") -> GeoDataFrame:
 
 def load_city_tag(
     city: str,
-    tag: str,
+    tag: Tag,
     split_values=True,
-    filter_values: Dict[str, str] = None,
     data_dir: Path = DATA_RAW_DIR,
 ) -> GeoDataFrame:
-    path = data_dir.joinpath(city, f"{tag}.pkl")
+    path = data_dir.joinpath(city, f"{tag.osmxtag}.pkl")
     if path.exists():
         gdf = []
-        for df in split_big_df(path, keep_columns=["osmid", tag, "geometry"]):
+        for df in split_big_df(path, keep_columns=["osmid", tag.osmxtag, "geometry"]):
             _gdf = GeoDataFrame(df, crs="EPSG:4326")
             if split_values:
                 # split values into separate columns
-                _gdf[tag] = _gdf[tag].str.split(";")
-                _gdf = _gdf.explode(tag)
-                _gdf[tag] = _gdf[tag].str.strip()
-            _gdf = filter_gdf(_gdf, tag, filter_values)
+                _gdf[str(tag.osmxtag)] = _gdf[tag.osmxtag].str.split(";")
+                _gdf = _gdf.explode(tag.osmxtag)
+                _gdf[tag.osmxtag] = _gdf[tag.osmxtag].str.strip()
+                _gdf = tag.filter_df_by_tag_values(_gdf)
             gdf.append(_gdf)
         return pd.concat(gdf, sort=False)
     else:
@@ -80,30 +81,15 @@ def load_city_tag(
 
 def load_city_tag_h3(
     city: str,
-    tag: str,
+    tag: Tag,
     resolution: int,
-    filter_values: Dict[str, str] = None,
     data_path: Path = DATA_INTERIM_DIR,
 ) -> GeoDataFrame:
-    path = data_path.joinpath(city, f"{tag}_{resolution}.pkl")
+    path = data_path.joinpath(city, f"{tag.osmxtag}_{resolution}.pkl")
     if path.exists():
-        gdf = load_gdf(path)
-        gdf[tag] = gdf[tag].str.split(";")
-        gdf = gdf.explode(tag)
-        gdf[tag] = gdf[tag].str.strip()
-        gdf = filter_gdf(gdf, tag, filter_values)
-        return gdf
+        return load_gdf(path)
     else:
         return None
-
-
-def filter_gdf(
-    gdf: GeoDataFrame, tag: str, filter_values: Dict[str, str]
-) -> GeoDataFrame:
-    if filter_values is not None:
-        selected_tag_values = set(filter_values[tag])
-        gdf = gdf[gdf[tag].isin(selected_tag_values)]
-    return gdf
 
 
 def load_filter(
@@ -140,7 +126,9 @@ def load_processed_dataset(
     city_column_name: str = "city",
     city: str = None,
 ) -> DataFrame:
-    dataset_path = data_dir.joinpath(f"{resolution}.pkl") if file_path is None else file_path
+    dataset_path = (
+        data_dir.joinpath(f"{resolution}.pkl") if file_path is None else file_path
+    )
     df = pd.read_pickle(dataset_path)
     if add_city_column:
         df[city_column_name] = city

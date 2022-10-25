@@ -18,7 +18,10 @@ from selenium.webdriver.chrome.options import Options
 import time
 from src.data.download import ensure_geometry_type
 
-def visualize_kepler(data: Union[pd.DataFrame, gpd.GeoDataFrame], name="data", config_name: str=None) -> KeplerGl:
+
+def visualize_kepler(
+    data: Union[pd.DataFrame, gpd.GeoDataFrame], name="data", config_name: str = None
+) -> KeplerGl:
     if config_name is not None:
         config = load_config(config_name)
         if config is not None:
@@ -26,22 +29,46 @@ def visualize_kepler(data: Union[pd.DataFrame, gpd.GeoDataFrame], name="data", c
     return KeplerGl(data={name: data})
 
 
-def visualize_clusters_kepler(data: Union[pd.DataFrame, gpd.GeoDataFrame], name="data") -> KeplerGl:
+def visualize_clusters_kepler(
+    data: Union[pd.DataFrame, gpd.GeoDataFrame], name="data"
+) -> KeplerGl:
     return visualize_kepler(data, name=name, config_name="clusters")
 
 
-def visualize_df(df: Union[pd.DataFrame, GeoDataFrame], map_source=ctx.providers.CartoDB.Positron, column="label", alpha=0.6, figsize=(15,15), **kwargs):
+def visualize_df(
+    df: Union[pd.DataFrame, GeoDataFrame],
+    map_source=ctx.providers.CartoDB.Positron,
+    column="label",
+    alpha=0.6,
+    figsize=(15, 15),
+    **kwargs,
+):
     if type(df) == pd.DataFrame or "geometry" not in df.columns:
         if "h3" in df.columns:
             df = df.copy(deep=False)
-            df['geometry'] = df['h3'].apply(h3_to_polygon)
+            df["geometry"] = df["h3"].apply(h3_to_polygon)
             df = gpd.GeoDataFrame(df, crs="EPSG:4326")
         else:
-            raise ValueError("Passed dataframe must either be GeoDataFrame with geometry column or have h3 column")
-    ax = df.to_crs(epsg=3857).plot(column=column, legend=True, alpha=alpha, figsize=figsize, **kwargs)
+            raise ValueError(
+                "Passed dataframe must either be GeoDataFrame with geometry column or have h3 column"
+            )
+    ax = df.to_crs(epsg=3857).plot(
+        column=column, legend=True, alpha=alpha, figsize=figsize, **kwargs
+    )
     ctx.add_basemap(ax, source=map_source, attribution_size=4)
     ax.axis("off")
-    ax.tick_params(axis='both', which='both', bottom=False, labelbottom=False, top=False, labeltop=False, left=False, labelleft=False, right=False, labelright=False)
+    ax.tick_params(
+        axis="both",
+        which="both",
+        bottom=False,
+        labelbottom=False,
+        top=False,
+        labeltop=False,
+        left=False,
+        labelleft=False,
+        right=False,
+        labelright=False,
+    )
     return ax.get_figure(), ax
 
 
@@ -57,8 +84,9 @@ def visualize_dendrogram(model, **kwargs):
                 current_count += counts[child_idx - n_samples]
         counts[i] = current_count
 
-    linkage_matrix = np.column_stack([model.children_, model.distances_,
-                                      counts]).astype(float)
+    linkage_matrix = np.column_stack(
+        [model.children_, model.distances_, counts]
+    ).astype(float)
 
     # Plot the corresponding dendrogram
     dendrogram(linkage_matrix, **kwargs)
@@ -68,7 +96,7 @@ def save_kepler_map(kepler_map: KeplerGl, figure_subpath: Path, remove_html=Fals
     result_path = FIGURES_DIR.joinpath(figure_subpath)
     result_path.parent.mkdir(parents=True, exist_ok=True)
     html_file = result_path.with_suffix(".html")
-    
+
     for gdf in kepler_map.data.values():
         ensure_geometry_type(gdf)
     kepler_map.save_to_html(file_name=html_file)

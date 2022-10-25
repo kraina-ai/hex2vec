@@ -5,6 +5,7 @@ from torch.utils.data import Dataset
 import numpy as np
 from tqdm import tqdm
 
+
 class H3NeighborDataset(Dataset):
     def __init__(self, data: pd.DataFrame):
         self.data = data
@@ -18,16 +19,22 @@ class H3NeighborDataset(Dataset):
 
         self.positive_indexes = {}
 
-        for i, (h3_index, hex_data) in tqdm(enumerate(self.data.iterrows()), total=len(self.data)):
+        for i, (h3_index, hex_data) in tqdm(
+            enumerate(self.data.iterrows()), total=len(self.data)
+        ):
             hex_neighbors_h3 = h3.k_ring(h3_index, 1)
             hex_neighbors_h3.remove(h3_index)
             available_neighbors_h3 = list(hex_neighbors_h3.intersection(all_indices))
 
-            contexts_indexes = [self.data.index.get_loc(idx) for idx in available_neighbors_h3]
+            contexts_indexes = [
+                self.data.index.get_loc(idx) for idx in available_neighbors_h3
+            ]
 
             negative_excluded_h3 = h3.k_ring(h3_index, 1)
             negative_excluded_h3 = list(negative_excluded_h3.intersection(all_indices))
-            positive_indexes = [self.data.index.get_loc(idx) for idx in negative_excluded_h3]
+            positive_indexes = [
+                self.data.index.get_loc(idx) for idx in negative_excluded_h3
+            ]
 
             self.inputs.extend([i] * len(contexts_indexes))
             self.contexts.extend(contexts_indexes)
@@ -41,7 +48,7 @@ class H3NeighborDataset(Dataset):
 
         self.input_h3 = np.array(self.input_h3)
         self.context_h3 = np.array(self.context_h3)
-    
+
     def __len__(self):
         return len(self.inputs)
 
