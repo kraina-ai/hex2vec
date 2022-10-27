@@ -154,7 +154,6 @@ def group_all_city_hexagons(
 
 
 def transform_city(interim_dir, output_dir, raw_resolution, c, res, tags, force):
-
     print(f"Processing {c.name} - h3 {res}")
     interim_path = interim_dir / c.stem / f"resolution_{res}"
     interim_path.mkdir(parents=True, exist_ok=True)
