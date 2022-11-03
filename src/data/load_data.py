@@ -1,7 +1,9 @@
 from audioop import add
 import os
 import h3
+import geopandas as gpd
 from geopandas import GeoDataFrame
+import geopolars as gp
 import numpy as np
 from numpy.lib.function_base import select
 import pandas as pd
@@ -9,35 +11,9 @@ from pandas.core.frame import DataFrame
 from src.settings import DATA_INTERIM_DIR, DATA_RAW_DIR, DATA_PROCESSED_DIR, FILTERS_DIR
 from pathlib import Path
 from typing import Dict, Generator, List
-import json
+import json5 as json
 
 from src.utils.advanced_tags import Tag
-
-
-# def split_n_save_df(df: DataFrame, path: Path, n: int) -> None:
-#     base_name = path.name[:path.name.rfind(".")]
-#     chunk_size = int(len(df) // n)  # force cast to int
-#     print(len(df))
-#     i = 0  # because we will return the first chunk
-#     while len(df) > chunk_size:
-#         base_name_i = f"{base_name}_{i}.pkl"
-#         # df.iloc[chunk_size * i : (chunk_size + 1) * i].to_pickle(path.parent.joinpath(base_name_i), protocol=4)
-#         _len = len(df)
-#         df.iloc[_len - chunk_size:].to_pickle(path.parent.joinpath(base_name_i), protocol=4)
-#         df = df.iloc[:_len - chunk_size]
-#         i += 1
-#     return df
-
-# def read_chunk_df(path: Path, ) -> Generator[DataFrame, None, None]:
-#     n = 0
-#     while True:
-#         base_name = f'{path.name[:path.name.rfind(".")]}_{n}.pkl'
-#         if not path.parent.joinpath(base_name).exists():
-#             break
-#         df = pd.read_pickle(path.parent.joinpath(base_name), )
-#         os.remove(path.parent.joinpath(base_name))
-#         n += 1
-#         yield df
 
 
 def split_big_df(
@@ -52,8 +28,22 @@ def split_big_df(
 
 
 def load_gdf(path: Path, crs="EPSG:4326") -> GeoDataFrame:
-    df = pd.read_pickle(path)
-    return GeoDataFrame(df, crs="EPSG:4326")
+    if ".feather" in path.suffixes:
+        df = None
+        for method in [gpd, pd]:
+            try:
+                df = method.read_feather(path)
+                break
+            except Exception as e:
+                continue
+        assert df is not None
+    else:
+        df = pd.read_pickle(path)
+
+    if "geometry" in df.columns:
+        return GeoDataFrame(df, crs=crs)
+    else:
+        return GeoDataFrame(df)
 
 
 def load_city_tag(
@@ -85,7 +75,7 @@ def load_city_tag_h3(
     resolution: int,
     data_path: Path = DATA_INTERIM_DIR,
 ) -> GeoDataFrame:
-    path = data_path.joinpath(city, f"{tag.osmxtag}_{resolution}.pkl")
+    path = data_path.joinpath(city, tag.file_name(f"_{resolution}", ".feather"))
     if path.exists():
         return load_gdf(path)
     else:

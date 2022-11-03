@@ -1,6 +1,6 @@
 import asyncio
 import itertools
-import json
+import json5 as json
 import os
 from typing import Iterable, List, Tuple
 import pandas as pd
@@ -96,6 +96,9 @@ def group_city_hexagons(data_dir: str, output_dir: str, resolution: int):
 @click.option(
     "--force", "-f", is_flag=True, default=False, help="Force re-creation of files"
 )
+@click.option(
+    "--parallel", "-p", is_flag=True, default=False, help="Use parallel processing"
+)
 def group_all_city_hexagons(
     data_dir: str,
     interim_dir: str,
@@ -106,6 +109,7 @@ def group_all_city_hexagons(
     city_file: str,
     synthetic_tag: Tuple[str],
     force: bool,
+    parallel: bool,
 ):
     # make sure the data directory exists
     data_dir = _check_dir_exists(data_dir)
@@ -134,23 +138,22 @@ def group_all_city_hexagons(
     # tags = [build_tag(tag, tag_filter.get(tag, None)) for tag in list(synthetic_tag)]
 
     # iterate over the cities
-    from joblib import Parallel, delayed
+    if parallel:
+        from joblib import Parallel, delayed
 
-    Parallel(n_jobs=os.cpu_count() - 1)(
-        delayed(transform_city)(
-            interim_dir, output_dir, raw_resolution, c, res, tags, force
+        Parallel(n_jobs=os.cpu_count() - 1)(
+            delayed(transform_city)(
+                interim_dir, output_dir, raw_resolution, c, res, tags, force
+            )
+            for c, res in itertools.product(_iter_cities(data_dir), resolution)
+            if (not len(city)) or (c.stem in city)
         )
-        for c, res in itertools.product(_iter_cities(data_dir), resolution)
-        if (not len(city)) or (c.stem in city)
-    )
-
-    # for c, res in itertools.product(
-    #         _iter_cities(data_dir), resolution
-    #     ):
-    #     if (not len(city)) or (c.stem in city):
-    #         transform_city(
-    #             interim_dir, output_dir, raw_resolution, c, res, tags, force
-    #         )
+    else:
+        for c, res in itertools.product(_iter_cities(data_dir), resolution):
+            if (not len(city)) or (c.stem in city):
+                transform_city(
+                    interim_dir, output_dir, raw_resolution, c, res, tags, force
+                )
 
 
 def transform_city(interim_dir, output_dir, raw_resolution, c, res, tags, force):
@@ -178,7 +181,7 @@ def transform_city(interim_dir, output_dir, raw_resolution, c, res, tags, force)
     city_out_path = output_dir / c.stem
     city_out_path.mkdir(exist_ok=True, parents=True)
     create_city_from_hex(
-        hex_parent_dir=interim_path, output_dir=city_out_path, resolution=res
+        hex_parent_dir=interim_path, output_dir=city_out_path, resolution=res, tags=tags
     )
 
 

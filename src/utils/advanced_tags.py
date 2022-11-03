@@ -26,8 +26,18 @@ class Tag:
         # store filter values as set for faster lookup
         self.filter_values = set(filter_values) if filter_values else None
 
+        # this is for the intermediate step. Basically do we need geometry after we have mapped the object to the hexagons
+        self.geom_required = False
+
     def __str__(self) -> str:
         return self.tag
+
+    def file_name(self, add_ons: str, ext: str) -> str:
+        return f"{self.osmxtag}{add_ons}.{ext}"
+
+    @property
+    def dtype(self) -> str:
+        return "int16"
 
     @property
     def osmxtag(
@@ -86,6 +96,15 @@ class BuildingArea(Tag):
     def __init__(self, tag: str = "building.area", *args, **kwargs) -> None:
         super().__init__(tag, *args, **kwargs)
 
+        self.geom_required = True
+
+    @property
+    def dtype(self) -> str:
+        return "float32"
+
+    def file_name(self, add_ons: str, ext: str) -> str:
+        return f"{self.tag}{add_ons}.{ext}"
+
     def _create_area_column(self, df):
         # create the area column
         # convert the crs to meters
@@ -123,9 +142,18 @@ class ParkingArea(Tag):
             "parking_space",
         }
 
+        self.geom_required = True
+
+    def file_name(self, add_ons: str, ext: str) -> str:
+        return f"{self.tag}{add_ons}.{ext}"
+
+    @property
+    def dtype(self) -> str:
+        return "float32"
+
     @property
     def osmxtag(self) -> str:
-        return 'amenity'
+        return "amenity"
 
     def _create_area_column(self, df):
         # create the area column

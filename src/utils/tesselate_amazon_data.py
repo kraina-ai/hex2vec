@@ -8,6 +8,19 @@ import backoff
 from tqdm import tqdm
 import alphashape
 import geopandas as gpd
+import dask_geopandas as dgpd
+import geopolars as gp
+
+# from dask import delayed as dask_delayed
+# import dask.dataframe as dd
+try:
+    import polars as pl
+
+    NO_POLARS = False
+except ImportError:
+    NO_POLARS = True
+# import feather
+# import numpy as np
 import h3
 import osmnx as ox
 import pandas as pd
@@ -218,7 +231,7 @@ def join_hex_dfs(
     target_resolution: int,
     output_dir: Path,
     force_overwrite: bool = False,
-) -> gpd.GeoDataFrame:
+) -> None:
 
     # create a map of smaller hexes to larger hexes
     for hex_id in tqdm(list(iterate_hex_dir(hex_parent_dir))):
@@ -287,7 +300,9 @@ def _map_2_small_hex(
 
     for tag in tag_list:
         # create the save path
-        tag_save_path = save_location.joinpath(f"{tag.osmxtag}_{target_resolution}.pkl")
+        tag_save_path = save_location.joinpath(
+            tag.file_name(f"_{target_resolution}", ".feather")
+        )
 
         # check if the file exists
         if tag_save_path.exists() and not force_overwrite:
@@ -301,18 +316,32 @@ def _map_2_small_hex(
                 tag_dfs.append(tag_gdf)
 
         if len(tag_dfs):
+
             # create a hex + neighbors super df
             tag_gdf = pd.concat(tag_dfs, axis=0)
-            # drop duplicated osmids
+            # convert tag_gdf to dask-gdf
             tag_gdf = tag_gdf.drop_duplicates(subset=["osmid"])
-            # spatial join of the hexes with the tag data. Only save data that is in the target hexagons.
-            tag_gdf = gpd.sjoin(
-                tag_gdf, hexes_gdf, how="inner", predicate="intersects"
-            )[["h3", "osmid", tag.osmxtag, "geometry"]]
-            # create a save location for the data
-            tag_gdf.to_pickle(
-                tag_save_path.absolute(),
-                protocol=4,
+            # split the tag_df into chunks to avoid memory issues and sort spatially
+            tag_gdf = dgpd.from_geopandas(tag_gdf, npartitions=4)  # .spatial_shuffle()
+            #
+            # get the chunks
+            dfs = []
+            for part in tag_gdf.partitions:
+                dfs.append(
+                    part.sjoin(
+                        hexes_gdf, how="inner", predicate="intersects"
+                    ).compute()[
+                        [
+                            "h3",
+                            "osmid",
+                            tag.osmxtag,
+                            *(("geometry",) if tag.geom_required else ()),
+                        ]
+                    ]
+                )
+            # join the chunks, drop duplicates, and save
+            pd.concat(dfs, axis=0).reset_index(drop=True).to_feather(
+                tag_save_path.absolute()
             )
 
 
@@ -370,6 +399,8 @@ def group_hex_tags(
 ) -> None:
 
     for hex_id in tqdm(list(iterate_hex_dir(hex_parent_dir))):
+
+        # print(hex_id.stem)
         h3_grouped_df = group_h3_tags(
             hex_id=hex_id.stem,
             resolution=resolution,
@@ -380,26 +411,116 @@ def group_hex_tags(
             hex_id.stem,
         )
         save_location.mkdir(parents=True, exist_ok=True)
-        h3_grouped_df.to_pickle(
-            save_location.joinpath(f"{resolution}.pkl").absolute(),
-            protocol=4,
+        h3_grouped_df.to_feather(
+            save_location.joinpath(f"{resolution}.feather").absolute(),
+            # protocol=4[],
         )
 
 
-def create_city_from_hex(
-    hex_parent_dir: Path, output_dir: Path, resolution: int, drop_all_zero=True
-) -> None:
-    dfs = [
-        pd.read_pickle(hex_id.joinpath(f"{resolution}.pkl"))
-        for hex_id in iterate_hex_dir(hex_parent_dir)
-    ]
+def _read_polars(
+    hex_path: Path,
+    resolution: int,
+    tags: List[Tag],
+    columns: List[str] = [],
+) -> pd.DataFrame:
+    df = pl.read_ipc(
+        hex_path.joinpath(f"{resolution}.feather"),
+        use_pyarrow=True,
+    )
+    if columns:
+        missing_cols = set(columns) - set(df.columns)
+        if len(missing_cols):
+            # df[list(missing_cols)] = 0
+            for col in missing_cols:
+                df = df.with_column(pl.Series(col, [0] * len(df), dtype=pl.Int64))
+    df = df.fill_nan(
+        0,
+    )
+    df = df.filter(
+        df.select([col for col in df.columns if col != "h3"]).sum(axis=1) > 0
+    )
+    return df.select(sorted(df.columns)).with_columns(
+        [
+            pl.col(col).cast(pl.UInt16 if "int" in tag.dtype else pl.Float32)
+            for tag in tags
+            for col in tag.columns
+            if col in columns
+        ]
+    )
 
-    df = pd.concat(dfs, ignore_index=True).set_index("h3")
-    df.fillna(0, inplace=True)
-    if drop_all_zero:
-        df = df[(df.T != 0).any()]
-    df.to_pickle(output_dir.joinpath(f"{resolution}.pkl").absolute(), protocol=4)
-    return df
+
+def create_city_from_hex(
+    hex_parent_dir: Path,
+    output_dir: Path,
+    resolution: int,
+    drop_all_zero=True,
+    tags: List[Tag] = None,
+) -> None:
+
+    import pyarrow.feather as feather
+
+    if NO_POLARS:
+        raise ImportError(
+            "polars is not installed. Please install it to use {}".format(
+                create_city_from_hex.__name__
+            )
+        )
+    # standardize and sort the columns
+    # read in all the files annd get a list of the columns
+    columns = []
+    for hex_id in iterate_hex_dir(hex_parent_dir):
+        columns.extend(
+            feather.read_table(
+                hex_id.joinpath(f"{resolution}.feather"), memory_map=True
+            ).column_names
+        )
+    columns = list(sorted(list(set(columns))))
+
+    df = pl.concat(
+        [
+            _read_polars(hex_id, resolution, columns=columns, tags=tags)
+            for hex_id in iterate_hex_dir(hex_parent_dir)
+        ]
+    )
+    df.write_parquet(
+        output_dir.joinpath(f"{resolution}.parquet").absolute(),
+    )  # compute=True, engine="pyarrow", compression="snappy")
+
+
+# def create_city_from_hex(
+#     hex_parent_dir: Path, output_dir: Path, resolution: int, drop_all_zero=True, tags: List[Tag] = None
+# ) -> None:
+
+#     import pyarrow.feather as feather
+#     # standardize and sort the columns
+#     # read in all the files annd get a list of the columns
+#     columns = []
+#     for hex_id in iterate_hex_dir(hex_parent_dir):
+#         columns.extend(feather.read_table(hex_id.joinpath(f"{resolution}.feather"), memory_map=True).column_names)
+#     columns = list(sorted(list(set(columns))))
+
+#     df = dd.from_delayed(
+#             [
+#                 dask_delayed(_read_joined_interim)(hex_id, resolution, columns=columns, tags=tags)
+#                 for hex_id in iterate_hex_dir(hex_parent_dir)
+#             ]
+#         )
+
+#     # read in the files with polar.rs
+#     # dfs = []
+
+# #     # set the number of threads to 1 to avoid memory issues
+# #     # with dask.config.set(scheduler="threads", num_workers=1):
+# #     df = dd.from_delayed(dfs, )
+# # #    df = dd.concat(dfs, axis=0)
+# #     df = df.drop_duplicates(subset=["h3"])
+
+#     # drop duplicates in the polar.rs dataframe
+#     # df.select(pl.col("h3")).unique()
+#     df = df.fillna(0)
+#     df = df.astype({col: tag.dtype for tag in tags for col in tag.columns if col in columns})
+#     df = df.loc[df.drop('h3', axis=1).sum(axis=1) != 0]
+#     df.to_parquet(output_dir.joinpath(f"{resolution}").absolute(), )  #compute=True, engine="pyarrow", compression="snappy")
 
 
 def get_buffer_hexes(

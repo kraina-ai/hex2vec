@@ -2,7 +2,7 @@ from typing import Dict, Union
 from keplergl import KeplerGl
 from pathlib import Path
 import pickle as pkl
-import json
+import json5 as json
 from src.settings import KEPLER_CONFIG_DIR
 
 
