@@ -134,6 +134,7 @@ def group_all_city_hexagons(
     tags = [
         build_tag(tag, tag_filter.get(tag, None))
         for tag in TOP_LEVEL_OSM_TAGS + list(synthetic_tag)
+        # for tag in list(synthetic_tag)
     ]
     # tags = [build_tag(tag, tag_filter.get(tag, None)) for tag in list(synthetic_tag)]
 
@@ -141,7 +142,7 @@ def group_all_city_hexagons(
     if parallel:
         from joblib import Parallel, delayed
 
-        Parallel(n_jobs=os.cpu_count() - 1)(
+        Parallel(n_jobs=os.cpu_count())(
             delayed(transform_city)(
                 interim_dir, output_dir, raw_resolution, c, res, tags, force
             )
@@ -184,6 +185,8 @@ def transform_city(interim_dir, output_dir, raw_resolution, c, res, tags, force)
         hex_parent_dir=interim_path, output_dir=city_out_path, resolution=res, tags=tags
     )
 
+    # have to do this because Joblib expects a return
+    return 1
 
 @click.command()
 @click.argument("city")
@@ -285,7 +288,7 @@ def group_all_city_tags(
 
 
 async def _pull_hex_gdf(
-    latlon_df: pd.DataFrame, data_dir: Path, tag_list: List[str], level: int
+    latlon_df: pd.DataFrame, data_dir: Path, tag_list: List[Tag], level: int
 ) -> None:
 
     # create a queue of needed files
@@ -337,7 +340,13 @@ async def _pull_hex_gdf(
     default=False,
     help="Use convex hull to generalize the city shape",
 )
-def pull_all(output_dir, latlon_csv, city, city_file, level, convex_hull) -> None:
+@click.option(
+    "--tag",
+    multiple=True,
+    default=None,
+    help="Explicitly specify the tags to pull. This overrides the default tags",
+)
+def pull_all(output_dir, latlon_csv, city, city_file, level, convex_hull, tag) -> None:
     # necessary imports
     import osmnx as ox
     from shapely.geometry import mapping
@@ -349,6 +358,13 @@ def pull_all(output_dir, latlon_csv, city, city_file, level, convex_hull) -> Non
 
     # handle paths
     output_path = Path(output_dir)
+
+    # create the synthetic tags
+    tag_filter = load_filter(Path() / "filters" / "from_wiki.json")
+    tags = [
+        build_tag(_tag, tag_filter.get(tag, None))
+        for _tag in (tag or TOP_LEVEL_OSM_TAGS)
+    ]
 
     if latlon_csv:
         # first find the hexagons that tessalate the csv and seperate out the
@@ -408,7 +424,7 @@ def pull_all(output_dir, latlon_csv, city, city_file, level, convex_hull) -> Non
             _pull_hex_gdf(
                 latlon_df=latlon,
                 data_dir=output_path,
-                tag_list=TOP_LEVEL_OSM_TAGS,
+                tag_list=tags,
                 level=level,
             )
         )
@@ -461,7 +477,7 @@ def pull_all(output_dir, latlon_csv, city, city_file, level, convex_hull) -> Non
             _pull_hex_gdf(
                 latlon_df=pd.concat(dfs, axis=0),
                 data_dir=output_path,
-                tag_list=TOP_LEVEL_OSM_TAGS,
+                tag_list=tags,
                 level=level,
             )
         )

@@ -142,11 +142,12 @@ async def walk_n_queue(
     queue: asyncio.Queue,
     city_dir: Path,
     hex_gdf: gpd.GeoDataFrame,
-    tag_list: str,
+    tag_list: List[Tag],
     resolution: int,
-    simplify_data: bool = True,
     force_pull: bool = False,
 ) -> None:
+
+    force_pull = True
 
     r_dir = city_dir.joinpath(f"resolution_{resolution}")
     r_dir.mkdir(parents=True, exist_ok=True)
@@ -156,41 +157,29 @@ async def walk_n_queue(
         for tag in tag_list:
             if (
                 not (
-                    hex_dir.joinpath(f"{tag}.pkl").exists()
-                    or hex_dir.joinpath(f"{tag}_is_empty.txt").exists()
+                    hex_dir.joinpath(f"{tag.osmxtag}.pkl").exists()
+                    or hex_dir.joinpath(f"{tag.osmxtag}_is_empty.txt").exists()
                 )
                 or force_pull
             ):
-                await queue.put((hex_dir.joinpath(f"{tag}.pkl"), row.geometry, tag))
+                await queue.put((hex_dir.joinpath(f"{tag.osmxtag}.pkl"), row.geometry, tag))
                 await asyncio.sleep(0)
 
 
-# async def pull_tags_for_hex(
-#     row: pd.Series,
-#     city_dir: Path,
-#     tag_list: str,
-#     simplify_data: bool = True,
-#     force_pull: bool = False
-# ) -> pd.Series:
-
-
 async def pull_tags_for_hex(queue: asyncio.Queue, semaphore: asyncio.Semaphore):
-    simplify_data = True
     async with semaphore:
         while True:
             # this is probs bad practice
-            save_path, geom, tag = await queue.get()
+            save_path, geom, tag  = await queue.get()
             print(
-                f"pulling {save_path.parent.parent.parent.stem}/{save_path.parent.stem}/{tag}"
+                f"pulling {save_path.parent.parent.parent.stem}/{save_path.parent.stem}/{tag.osmxtag}"
             )
-            gdf = await async_ox_geometries(geom, tags={tag: True})
+            gdf = await async_ox_geometries(geom, tags={tag.osmxtag: True})
             # clean the data
             if not gdf.empty:
                 gdf = ensure_geometry_type(gdf)
                 gdf = (
-                    gdf.reset_index()[["osmid", tag, "geometry"]]
-                    if simplify_data
-                    else gdf.reset_index()
+                    tag.extract_osmnx_tag(gdf.reset_index())
                 )
                 # save the gdf
                 gdf.to_pickle(save_path.absolute())
@@ -200,7 +189,7 @@ async def pull_tags_for_hex(queue: asyncio.Queue, semaphore: asyncio.Semaphore):
             else:
                 # record that the df is empty so we don't try again
                 with open(
-                    save_path.parent.joinpath(f"{tag}_is_empty.txt").absolute(), "w"
+                    save_path.parent.joinpath(f"{tag.osmxtag}_is_empty.txt").absolute(), "w"
                 ) as f:
                     pass
             # tell everyon the that the task is done
@@ -301,7 +290,7 @@ def _map_2_small_hex(
     for tag in tag_list:
         # create the save path
         tag_save_path = save_location.joinpath(
-            tag.file_name(f"_{target_resolution}", ".feather")
+            tag.file_name(f"_{target_resolution}", "feather")
         )
 
         # check if the file exists
@@ -328,17 +317,12 @@ def _map_2_small_hex(
             dfs = []
             for part in tag_gdf.partitions:
                 dfs.append(
-                    part.sjoin(
-                        hexes_gdf, how="inner", predicate="intersects"
-                    ).compute()[
-                        [
-                            "h3",
-                            "osmid",
-                            tag.osmxtag,
-                            *(("geometry",) if tag.geom_required else ()),
-                        ]
-                    ]
+                    tag.sjoin(
+                        hexes_gdf=hexes_gdf, 
+                        tag_gdf=part,
+                    )
                 )
+
             # join the chunks, drop duplicates, and save
             pd.concat(dfs, axis=0).reset_index(drop=True).to_feather(
                 tag_save_path.absolute()

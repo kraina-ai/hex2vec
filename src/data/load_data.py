@@ -19,7 +19,10 @@ from src.utils.advanced_tags import Tag
 def split_big_df(
     path: Path, keep_columns: List[str]
 ) -> Generator[DataFrame, None, None]:
-    df = pd.read_pickle(path).reset_index()[keep_columns]
+    df = pd.read_pickle(path).reset_index()
+    df = df[df.columns.intersection(keep_columns)]
+    df[pd.Index(keep_columns).difference(df.columns)] = pd.NA
+    # create empty columns with the difference of columns
     gb = df.memory_usage(deep=True).sum() / 1000000000.0
     # print("Size of df:", gb)
     if gb > 3:
@@ -55,7 +58,7 @@ def load_city_tag(
     path = data_dir.joinpath(city, f"{tag.osmxtag}.pkl")
     if path.exists():
         gdf = []
-        for df in split_big_df(path, keep_columns=["osmid", tag.osmxtag, "geometry"]):
+        for df in split_big_df(path, keep_columns=tag.keep_columns):
             _gdf = GeoDataFrame(df, crs="EPSG:4326")
             if split_values:
                 # split values into separate columns
@@ -75,7 +78,7 @@ def load_city_tag_h3(
     resolution: int,
     data_path: Path = DATA_INTERIM_DIR,
 ) -> GeoDataFrame:
-    path = data_path.joinpath(city, tag.file_name(f"_{resolution}", ".feather"))
+    path = data_path.joinpath(city, tag.file_name(f"_{resolution}", "feather"))
     if path.exists():
         return load_gdf(path)
     else:

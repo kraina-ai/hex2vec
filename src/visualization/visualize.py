@@ -52,7 +52,7 @@ def visualize_df(
             raise ValueError(
                 "Passed dataframe must either be GeoDataFrame with geometry column or have h3 column"
             )
-    ax = df.to_crs(epsg=3857).plot(
+    ax = df.to_crs(epsg=df["geometry"].estimate_utm_crs()).plot(
         column=column, legend=True, alpha=alpha, figsize=figsize, **kwargs
     )
     ctx.add_basemap(ax, source=map_source, attribution_size=4)
