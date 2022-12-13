@@ -1,10 +1,9 @@
 {
     "cities": [
-        "Boston, USA",
-        "Seattle, USA",
-        "Chicago, USA",
-        "Austin, USA",
+        // "Boston, USA",
+        // "Seattle, USA",
+        // "Austin, USA",
         "Los Angeles, USA",
-        "London, United Kingdom"
+        // "London, United Kingdom"
     ]
 }
