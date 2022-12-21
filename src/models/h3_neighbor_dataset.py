@@ -25,7 +25,7 @@ class H3NeighborDataset(Dataset):
 
             contexts_indexes = [self.data.index.get_loc(idx) for idx in available_neighbors_h3]
 
-            negative_excluded_h3 = h3.k_ring(h3_index, 1)
+            negative_excluded_h3 = h3.k_ring(h3_index, 2)
             negative_excluded_h3 = list(negative_excluded_h3.intersection(all_indices))
             positive_indexes = [self.data.index.get_loc(idx) for idx in negative_excluded_h3]
 
