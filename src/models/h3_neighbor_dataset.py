@@ -6,7 +6,7 @@ import numpy as np
 from tqdm import tqdm
 
 class H3NeighborDataset(Dataset):
-    def __init__(self, data: pd.DataFrame):
+    def __init__(self, data: pd.DataFrame, negative_sample_k_distance: int = 2):
         self.data = data
         self.data_torch = torch.Tensor(self.data.to_numpy())
         all_indices = set(data.index)
@@ -25,7 +25,7 @@ class H3NeighborDataset(Dataset):
 
             contexts_indexes = [self.data.index.get_loc(idx) for idx in available_neighbors_h3]
 
-            negative_excluded_h3 = h3.k_ring(h3_index, 1)
+            negative_excluded_h3 = h3.k_ring(h3_index, negative_sample_k_distance)
             negative_excluded_h3 = list(negative_excluded_h3.intersection(all_indices))
             positive_indexes = [self.data.index.get_loc(idx) for idx in negative_excluded_h3]
 
