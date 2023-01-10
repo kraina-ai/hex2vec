@@ -1,21 +1,43 @@
 from geopandas import GeoDataFrame
 from numpy.lib.function_base import select
 import pandas as pd
+import geopandas as gpd
 from pandas.core.frame import DataFrame
 from src.settings import DATA_INTERIM_DIR, DATA_RAW_DIR, DATA_PROCESSED_DIR, FILTERS_DIR
 from pathlib import Path
 from typing import Dict, List
 import json
 
+
 def load_gdf(path: Path, crs="EPSG:4326") -> GeoDataFrame:
-    df = pd.read_pickle(path)
-    gdf = GeoDataFrame(df, crs="EPSG:4326")
-    return gdf
+    if ".feather" in path.suffixes:
+        df = None
+        for method in [gpd, pd]:
+            try:
+                df = method.read_feather(path)
+                break
+            except Exception as e:
+                continue
+        assert df is not None
+    else:
+        df = pd.read_pickle(path)
+
+    if "geometry" in df.columns:
+        return GeoDataFrame(df, crs=crs)
+    else:
+        return GeoDataFrame(df)
+
 
 def load_city_tag(city: str, tag: str, split_values=True, filter_values: Dict[str, str] = None) -> GeoDataFrame:
-    path = DATA_RAW_DIR.joinpath(city, f"{tag}.pkl")
+    path = DATA_RAW_DIR.joinpath(city, f"{tag}.feather")
     if path.exists():
         gdf = load_gdf(path)
+        try:
+            gdf.reset_index(inplace=True)
+        except ValueError:
+            gdf.reset_index(inplace=True, drop=True)
+        # we don't need the extra columns from this point
+        gdf.drop(columns=gdf.columns.difference(['osmid', tag, 'geometry']), inplace=True)
         if split_values:
             gdf[tag] = gdf[tag].str.split(';')
             gdf = gdf.explode(tag)
@@ -26,7 +48,7 @@ def load_city_tag(city: str, tag: str, split_values=True, filter_values: Dict[st
         return None
 
 def load_city_tag_h3(city: str, tag: str, resolution: int, filter_values: Dict[str, str] = None) -> GeoDataFrame:
-    path = DATA_INTERIM_DIR.joinpath(city, f"{tag}_{resolution}.pkl")
+    path = DATA_INTERIM_DIR.joinpath(city, f"{tag}_{resolution}.feather")
     if path.exists():
         gdf = load_gdf(path)
         gdf = filter_gdf(gdf, tag, filter_values)
@@ -58,14 +80,14 @@ def load_filter(filter_name: str, values_to_drop: Dict[str, List[str]] = None) -
 
 
 def load_grouped_city(city: str, resolution: int) -> DataFrame:
-    city_df_path = DATA_PROCESSED_DIR.joinpath(city).joinpath(f"{resolution}.pkl")
-    return pd.read_pickle(city_df_path)
+    city_df_path = DATA_PROCESSED_DIR.joinpath(city).joinpath(f"{resolution}.feather")
+    return pd.read_feather(city_df_path)
 
 
 def load_processed_dataset(resolution: int, select_cities: List[str]=None, drop_cities: List[str]=None,
     select_tags: List[str]=None) -> DataFrame:
-    dataset_path = DATA_PROCESSED_DIR.joinpath(f"{resolution}.pkl")
-    df = pd.read_pickle(dataset_path)
+    dataset_path = DATA_PROCESSED_DIR.joinpath(f"{resolution}.feather")
+    df = pd.read_feather(dataset_path).set_index('h3')
     if select_cities is not None:
         df = df[df['city'].isin(select_cities)]
     if drop_cities is not None:

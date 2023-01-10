@@ -86,7 +86,7 @@ def get_hexes_polygons_for_city(
     bounding_gdf = get_bounding_gdf(city)
 
     if type(bounding_gdf.geometry[0]) == MultiPolygon:
-        bounding_gdf = bounding_gdf.explode().reset_index(drop=True)
+        bounding_gdf = bounding_gdf.explode(index_parts=False).reset_index(drop=True)
 
     hexes_gdf = get_hexes_for_place(bounding_gdf, resolution, return_gdf=True)
     hexes_gdf.to_file(cache_file, driver="GeoJSON")
@@ -94,11 +94,11 @@ def get_hexes_polygons_for_city(
 
 
 def add_h3_indices(gdf: GeoDataFrame, city: Union[str, List[str]], resolution: int) -> GeoDataFrame:
-    hexes_polygons_gdf = get_hexes_polygons_for_city(city, resolution)
-    h3_added = gpd.sjoin(gdf, hexes_polygons_gdf, how="inner", op="intersects")
+    hexes_polygons_gdf = get_hexes_polygons_for_city(city, resolution, use_cache=True)
+    h3_added = gpd.sjoin(gdf, hexes_polygons_gdf, how="inner", predicate="intersects")
     return h3_added
 
-def add_h3_indices_to_city(city: Union[str, List[str]], resolution: int):
+def add_h3_indices_to_city(city: Union[str, List[str]], resolution: int, force=False, filter_values: Dict[str, List[str]] = None):
     if type(city) == str:
         city_name = city
     else:
@@ -106,12 +106,19 @@ def add_h3_indices_to_city(city: Union[str, List[str]], resolution: int):
 
     city_destination_path = prepare_city_path(DATA_INTERIM_DIR, city_name)
     for tag in TOP_LEVEL_OSM_TAGS:
-        tag_gdf = load_city_tag(city_name, tag)
+        if filter_values is not None and tag not in filter_values.keys():
+            continue
+        # check if file already exists
+        result_path = city_destination_path.joinpath(f"{tag}_{resolution}.feather")
+        if result_path.exists() and not force:
+            print(f"Skipping {tag} for {city_name}, already exists")
+            continue
+        
+        tag_gdf = load_city_tag(city_name, tag, filter_values=filter_values)
         if tag_gdf is not None:
-            tag_gdf = tag_gdf[['unique_id', tag, 'geometry']]
-            h3_gdf = add_h3_indices(tag_gdf, city, resolution)
-            result_path = city_destination_path.joinpath(f"{tag}_{resolution}.pkl")
-            h3_gdf.to_pickle(result_path)
+            tag_gdf = tag_gdf[['osmid', tag, 'geometry']]
+            h3_gdf = add_h3_indices(tag_gdf, city, resolution)[['osmid', tag, 'h3']].reset_index(drop=True)
+            h3_gdf.to_feather(result_path)
         else:
             print(f"Tag {tag} doesn't exist for city {city}, skipping...")
 
@@ -139,7 +146,7 @@ def group_df_by_tag_values(df, tag: str):
     indicators[indicators.notnull()] = 1
     indicators.fillna(0, inplace = True)
     indicators = indicators.add_prefix(f"{tag}_")
-    result = pd.concat([tags, indicators], axis=1).groupby('h3').sum().reset_index()
+    result = pd.concat([tags[['h3']], indicators], axis=1).groupby('h3').sum().reset_index()
     return result
 
 
@@ -152,18 +159,16 @@ def group_city_tags(city: str, resolution: int, tags=TOP_LEVEL_OSM_TAGS, filter_
         else:
             tag_grouped = pd.DataFrame()
         if fill_missing and filter_values is not None:
-            columns_names = [f"{tag}_{value}" for value in filter_values[tag]]
-            for c_name in columns_names:
-                if c_name not in tag_grouped.columns:
-                    tag_grouped[c_name] = 0
+            missing_columns = pd.Index([f"{tag}_{value}" for value in filter_values[tag]]).difference(tag_grouped.columns)
+            tag_grouped = tag_grouped.reindex(columns=tag_grouped.columns.union(missing_columns), fill_value=0)
         dfs.append(tag_grouped)
 
     results = pd.concat(dfs, axis=0)
     results = results.fillna(0).groupby('h3').sum().reset_index()
     
     city_destination_path = prepare_city_path(DATA_PROCESSED_DIR, city)
-    file_path = city_destination_path.joinpath(f"{resolution}.pkl")
-    results.to_pickle(file_path)
+    file_path = city_destination_path.joinpath(f"{resolution}.feather")
+    results.to_feather(file_path)
     return results
 
 def group_city_top_level_tags(city: str, resolution: int, tags=TOP_LEVEL_OSM_TAGS) -> pd.DataFrame:
@@ -193,14 +198,10 @@ def group_cities(cities: str, resolution: int, add_city_column=True) -> pd.DataF
     dfs = []
     for city in cities:
         df = load_grouped_city(city, resolution)
-        print(city)
-        print(df.isna().sum().sum())
-        print(len(df.columns))
         if add_city_column:
             df['city'] = city
         dfs.append(df)
     
     all_cities = pd.concat(dfs, axis=0, ignore_index=True).set_index('h3')
-    print(all_cities.isna().sum().sum())
-    all_cities.to_pickle(DATA_PROCESSED_DIR.joinpath(f"{resolution}.pkl"))
+    all_cities.reset_index().to_feather(DATA_PROCESSED_DIR.joinpath(f"{resolution}.feather"))
     return all_cities
