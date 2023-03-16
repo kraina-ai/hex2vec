@@ -7,6 +7,7 @@ import geopolars as gp
 import numpy as np
 from numpy.lib.function_base import select
 import pandas as pd
+import geopandas as gpd
 from pandas.core.frame import DataFrame
 from src.settings import DATA_INTERIM_DIR, DATA_RAW_DIR, DATA_PROCESSED_DIR, FILTERS_DIR
 from pathlib import Path
@@ -28,6 +29,7 @@ def split_big_df(
     if gb > 3:
         print("[!] Warning - df is potentially too big to load into memory")
     yield df
+
 
 
 def load_gdf(path: Path, crs="EPSG:4326") -> GeoDataFrame:
@@ -104,8 +106,8 @@ def load_filter(
 
 
 def load_grouped_city(city: str, resolution: int) -> DataFrame:
-    city_df_path = DATA_PROCESSED_DIR.joinpath(city).joinpath(f"{resolution}.pkl")
-    return pd.read_pickle(city_df_path)
+    city_df_path = DATA_PROCESSED_DIR.joinpath(city).joinpath(f"{resolution}.feather")
+    return pd.read_feather(city_df_path)
 
 
 def load_processed_dataset(

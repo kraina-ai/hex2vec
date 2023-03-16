@@ -245,9 +245,6 @@ def group_cities(cities: str, resolution: int, add_city_column=True) -> pd.DataF
     dfs = []
     for city in cities:
         df = load_grouped_city(city, resolution)
-        print(city)
-        print(df.isna().sum().sum())
-        print(len(df.columns))
         if add_city_column:
             df["city"] = city
         dfs.append(df)
