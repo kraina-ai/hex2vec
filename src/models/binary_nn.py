@@ -41,7 +41,7 @@ class BinaryNN(pl.LightningModule):
         y = torch.cat([y_pos, y_neg])
 
         loss = F.binary_cross_entropy_with_logits(scores, y)
-        f_score = f1(sigmoid(scores), y.int())
+        f_score = f1(sigmoid(scores), y.int(), task="binary")
         self.log("train_loss", loss, on_step=True, on_epoch=True)
         self.log("train_f1", f_score, on_step=True, on_epoch=True)
         return loss
@@ -55,7 +55,7 @@ class BinaryNN(pl.LightningModule):
         y = torch.cat([y_pos, y_neg])
 
         loss = F.binary_cross_entropy_with_logits(scores, y)
-        f_score = f1(sigmoid(scores), y.int())
+        f_score = f1(sigmoid(scores), y.int(), task="binary")
         self.log("val_loss", loss, on_step=True, on_epoch=True)
         self.log("val_f1", f_score, on_step=True, on_epoch=True)
         return loss

@@ -6,8 +6,8 @@ import numpy as np
 from tqdm import tqdm
 
 
-class H3NeighborDataset(Dataset):
-    def __init__(self, data: pd.DataFrame, neighbor_k_ring=1, dead_k_ring=2):
+class H3ServiceNeighbors(Dataset):
+    def __init__(self, data: pd.DataFrame, grouped_df: pd.Series):
         self.data = data
         self.data_torch = torch.Tensor(self.data.to_numpy(dtype=np.float32))
         all_indices = set(data.index)
@@ -18,30 +18,34 @@ class H3NeighborDataset(Dataset):
         self.context_h3 = []
 
         self.positive_indexes = {}
+        i = 0
+        for _, (h3_inds, h3s)  in tqdm(grouped_df.items(), total=len(grouped_df)):
+            for h3_index in h3s:
+                available_neighbors_h3 = [
+                    _h for _h in h3s if _h != h3_index
+                ]
 
-        for i, (h3_index, hex_data) in tqdm(
-            enumerate(self.data.iterrows()), total=len(self.data)
-        ):
-            hex_neighbors_h3 = h3.k_ring(h3_index, neighbor_k_ring)
-            hex_neighbors_h3.remove(h3_index)
-            available_neighbors_h3 = list(hex_neighbors_h3.intersection(all_indices))
+                contexts_indexes = [
+                    _i for _i, _h in
+                    zip(h3_inds, h3s)
+                    if _h in available_neighbors_h3
+                ]
 
-            contexts_indexes = [
-                self.data.index.get_loc(idx) for idx in available_neighbors_h3
-            ]
+                # add in the neighbors of h3_index
+                neighbors = h3.k_ring(h3_index, 1)
+                neighbors = neighbors.difference({h3_index})
+                for neighbor in neighbors:
+                    if neighbor in all_indices:
+                        available_neighbors_h3.append(neighbor)
+                        contexts_indexes.append(data.index.get_loc(neighbor))
 
-            negative_excluded_h3 = h3.k_ring(h3_index, dead_k_ring)
-            negative_excluded_h3 = list(negative_excluded_h3.intersection(all_indices))
-            positive_indexes = [
-                self.data.index.get_loc(idx) for idx in negative_excluded_h3
-            ]
+                self.inputs.extend([i] * len(contexts_indexes))
+                self.contexts.extend(contexts_indexes)
+                self.positive_indexes[h3_index] = set(contexts_indexes)
 
-            self.inputs.extend([i] * len(contexts_indexes))
-            self.contexts.extend(contexts_indexes)
-            self.positive_indexes[h3_index] = set(positive_indexes)
-
-            self.input_h3.extend([h3_index] * len(available_neighbors_h3))
-            self.context_h3.extend(available_neighbors_h3)
+                self.input_h3.extend([h3_index] * len(available_neighbors_h3))
+                self.context_h3.extend(available_neighbors_h3)
+                i += 1
 
         self.inputs = np.array(self.inputs)
         self.contexts = np.array(self.contexts)
